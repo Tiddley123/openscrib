@@ -1,0 +1,23 @@
+[package]
+name = "openscrib-process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+matroska-demuxer = "0.8.1"
+ocrs = "0.13.1"
+openscrib-core = { version = "0.1.0", path = "../openscrib-core" }
+opus = "0.4.0"
+rten = "0.26"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tracing = "0.1.44"
+ureq = "3.5.1"
+whisper-rs = { version = "0.16.0", features = ["tracing_backend"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

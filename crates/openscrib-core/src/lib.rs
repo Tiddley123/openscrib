@@ -7,6 +7,7 @@ pub mod markers;
 pub mod mkv;
 pub mod mp4;
 pub mod project;
+pub mod quality;
 
 pub use clock::Clock;
 pub use manifest::*;

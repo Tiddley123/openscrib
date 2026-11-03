@@ -1,11 +1,13 @@
 <script lang="ts">
   import { open as openDialog } from '@tauri-apps/plugin-dialog'
   import { onMount } from 'svelte'
-  import { api, formatTime, type Devices, type RecentItem } from './api'
+  import { api, formatTime, type Devices, type RecentItem, type RecordRequest } from './api'
+  import { settings } from './settings.svelte'
 
-  let { onopen, onrecord }: {
+  let { onopen, onrecord, onsettings }: {
     onopen: (path: string) => void
-    onrecord: (req: { video: boolean; audio: boolean; monitor: number | null; mic: string | null }) => void
+    onrecord: (req: RecordRequest) => void
+    onsettings: () => void
   } = $props()
 
   let recents = $state<RecentItem[]>([])
@@ -41,7 +43,10 @@
 <main>
   <header>
     <div class="brand"><span class="dot"></span>OpenSCRIB</div>
-    <button onclick={browse}>Open project…</button>
+    <div class="head-actions">
+      <button class="ghost" onclick={onsettings}>Settings</button>
+      <button onclick={browse}>Open project…</button>
+    </div>
   </header>
 
   <section class="hero">
@@ -80,7 +85,7 @@
           <p class="hint">Screen video needs <code>openh264-2.6.0-win64.dll</code> beside the app or in <code>runtime/</code>.</p>
         {/if}
       </div>
-      <button class="primary big" onclick={() => onrecord({ video, audio, monitor, mic })}>
+      <button class="primary big" onclick={() => onrecord({ video, audio, monitor, mic, quality: settings.quality })}>
         <span class="rec"></span> Start recording
       </button>
       <p class="hint">The window minimises while you record. Stop with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F12</kbd>.</p>
@@ -119,6 +124,10 @@
     justify-content: space-between;
     align-items: center;
     padding: 20px 0;
+  }
+  .head-actions {
+    display: flex;
+    gap: 8px;
   }
   .brand {
     display: flex;

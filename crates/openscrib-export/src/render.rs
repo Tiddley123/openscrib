@@ -9,11 +9,8 @@ use image::{Rgba, RgbaImage};
 use openscrib_core::markers::{MarkerStyle, draw_marker};
 use openscrib_core::{Annotation, Manifest, Point, ProjectDir, Rect, Step, StepKind};
 
-/// Accent used for boxes and arrows; matches the click marker.
-const ACCENT: [u8; 3] = [255, 92, 53];
-/// Redaction block size in source pixels. Large enough that text inside is
-/// unrecoverable, unlike a Gaussian blur.
-const PIXELATE: u32 = 14;
+/// Redactions are painted solid: blurs and pixelation can leak large text.
+const REDACT: [u8; 3] = [32, 32, 36];
 /// Window crops smaller than this get padded so a lone menu or dialog still
 /// has some surrounding context.
 const MIN_CROP: (u32, u32) = (900, 560);
@@ -50,7 +47,7 @@ pub fn render_step(dir: &ProjectDir, manifest: &Manifest, step: &Step, opts: &Re
 
     for a in &step.annotations {
         if let Annotation::Blur { rect } = a {
-            pixelate(&mut img, *rect);
+            redact(&mut img, *rect);
         }
     }
 
@@ -63,6 +60,7 @@ pub fn render_step(dir: &ProjectDir, manifest: &Manifest, step: &Step, opts: &Re
         out = imageops::resize(&out, opts.max_width, h, FilterType::Lanczos3);
     }
 
+    let accent = manifest.accent_rgb();
     let map = |p: Point| ((p.x - crop.x) as f32 * s, (p.y - crop.y) as f32 * s);
     // Shapes and markers keep the size they would have at 1:1 on the
     // source monitor's DPI, not shrink with the crop's downscale.
@@ -73,19 +71,22 @@ pub fn render_step(dir: &ProjectDir, manifest: &Manifest, step: &Step, opts: &Re
             Annotation::Box { rect } => {
                 let (x0, y0) = map(rect.origin());
                 let (x1, y1) = map(Point::new(rect.x + rect.w as i32, rect.y + rect.h as i32));
-                stroke_rect(&mut out, (x0, y0), (x1, y1), 4.0 * ui, ACCENT);
+                stroke_rect(&mut out, (x0, y0), (x1, y1), 4.0 * ui, accent);
             }
-            Annotation::Arrow { from, to } => draw_arrow(&mut out, map(*from), map(*to), 5.0 * ui, ACCENT),
+            Annotation::Arrow { from, to } => draw_arrow(&mut out, map(*from), map(*to), 5.0 * ui, accent),
             Annotation::Marker { at } => {
                 let (x, y) = map(*at);
-                draw_marker(&mut out, Point::new(x.round() as i32, y.round() as i32), scaled(MarkerStyle::default(), ui));
+                draw_marker(&mut out, Point::new(x.round() as i32, y.round() as i32), scaled(MarkerStyle { color: accent, ..MarkerStyle::default() }, ui));
             }
         }
     }
     if let (StepKind::Click, Some(c)) = (step.kind, &step.click) {
         let (x, y) = map(c.in_frame);
         let at = Point::new(x.round() as i32, y.round() as i32);
-        let style = scaled(MarkerStyle::for_click(c, 1.0), ui);
+        let mut style = scaled(MarkerStyle::for_click(c, 1.0), ui);
+        if c.button != openscrib_core::MouseButton::Right {
+            style.color = accent;
+        }
         draw_marker(&mut out, at, style);
         if c.double {
             draw_marker(&mut out, at, MarkerStyle { radius: style.radius + style.ring * 2.5, ..style });
@@ -172,35 +173,13 @@ pub fn clamp_rect(r: Rect, (fw, fh): (u32, u32)) -> Rect {
     Rect { x, y, w, h }
 }
 
-/// Replace every block in `rect` with its average colour.
-pub fn pixelate(img: &mut RgbaImage, rect: Rect) {
+/// Paint `rect` solid so nothing underneath survives in the export.
+pub fn redact(img: &mut RgbaImage, rect: Rect) {
     let r = clamp_rect(rect, img.dimensions());
-    let (x0, y0) = (r.x as u32, r.y as u32);
-    let (x1, y1) = (x0 + r.w, y0 + r.h);
-    let mut by = y0;
-    while by < y1 {
-        let mut bx = x0;
-        let bh = PIXELATE.min(y1 - by);
-        while bx < x1 {
-            let bw = PIXELATE.min(x1 - bx);
-            let mut sum = [0u64; 4];
-            for y in by..by + bh {
-                for x in bx..bx + bw {
-                    for (s, v) in sum.iter_mut().zip(img.get_pixel(x, y).0) {
-                        *s += v as u64;
-                    }
-                }
-            }
-            let n = (bw * bh) as u64;
-            let avg = Rgba(sum.map(|s| (s / n) as u8));
-            for y in by..by + bh {
-                for x in bx..bx + bw {
-                    img.put_pixel(x, y, avg);
-                }
-            }
-            bx += bw;
+    for y in r.y as u32..r.y as u32 + r.h {
+        for x in r.x as u32..r.x as u32 + r.w {
+            img.put_pixel(x, y, Rgba([REDACT[0], REDACT[1], REDACT[2], 255]));
         }
-        by += bh;
     }
 }
 
@@ -318,12 +297,13 @@ mod tests {
     }
 
     #[test]
-    fn pixelate_destroys_detail() {
+    fn redaction_is_solid() {
         let mut img = RgbaImage::from_fn(28, 28, |x, _| if x % 2 == 0 { Rgba([0, 0, 0, 255]) } else { Rgba([255, 255, 255, 255]) });
-        pixelate(&mut img, Rect { x: 0, y: 0, w: 28, h: 28 });
-        let p = img.get_pixel(3, 3).0;
-        assert!(p[0] > 100 && p[0] < 155, "{p:?}");
-        assert_eq!(img.get_pixel(0, 0), img.get_pixel(13, 13));
+        redact(&mut img, Rect { x: 4, y: 4, w: 10, h: 10 });
+        for (x, y) in [(4, 4), (5, 9), (13, 13)] {
+            assert_eq!(img.get_pixel(x, y).0, [32, 32, 36, 255]);
+        }
+        assert_eq!(img.get_pixel(15, 4).0, [255, 255, 255, 255]);
     }
 
     #[test]

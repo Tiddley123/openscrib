@@ -3,7 +3,7 @@
 // app/dev-mock/ (gitignored; put an unpacked .scrib in dev-mock/project and
 // an MP4 at dev-mock/preview.mp4).
 
-import type { Manifest, ProjectView, RecentItem } from './api'
+import type { Manifest, ModelStatus, ProjectView, RecentItem } from './api'
 
 export const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -33,6 +33,17 @@ export const mockApi = {
     return { monitors: m.monitors, mics: [['Default microphone', true]] as [string, boolean][], video_available: true }
   },
   defaultExportDir: async () => 'C:\\exports\\sample-export',
+  async listModels(): Promise<ModelStatus[]> {
+    const m = (id: string, kind: ModelStatus['kind'], label: string, size_mb: number, installed: boolean) =>
+      ({ id, kind, label, note: '', file: '', url: '', size_mb, installed })
+    return [
+      m('base.en', 'whisper', 'Whisper base (English)', 142, false),
+      m('small.en', 'whisper', 'Whisper small (English)', 466, true),
+      m('large-v3-turbo', 'whisper', 'Whisper large v3 turbo (multilingual)', 547, false),
+      m('ocr-detection', 'ocr_detection', 'OCR text detection', 3, true),
+      m('ocr-recognition', 'ocr_recognition', 'OCR text recognition', 10, true),
+    ]
+  },
 }
 
 async function manifest(): Promise<Manifest> {

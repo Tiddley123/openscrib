@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatTime, localUrl, type Step } from './api'
+  import { api, formatTime, localUrl, type Step } from './api'
 
   let { step = $bindable(), number, previewVideo, duration, nextT, ondelete }: {
     step: Step
@@ -64,6 +64,31 @@
   }
 
   const kinds = { click: 'Click', typed: 'Typing', shortcut: 'Shortcut' }
+
+  function useText(t: string) {
+    step.text = t
+    step.text_edited = true
+  }
+
+  function verb(): string {
+    const c = step.click
+    if (c?.double) return 'Double-click'
+    if (c?.button === 'right') return 'Right-click'
+    return 'Click'
+  }
+
+  function sentence(s: string): string {
+    const t = s.trim().replace(/\s+/g, ' ')
+    if (!t) return t
+    const cap = t[0].toUpperCase() + t.slice(1)
+    return /[.!?]$/.test(cap) ? cap : `${cap}.`
+  }
+
+  async function resetText() {
+    step.text_edited = false
+    step.text = await api.draftText($state.snapshot(step)).catch(() => step.text)
+  }
+  const noteLabels = { arrow: 'Arrow', box: 'Box', marker: 'Marker', blur: 'Redaction' }
 </script>
 
 <aside>
@@ -82,6 +107,69 @@
       placeholder="Describe this step"
     ></textarea>
     <p class="hint">Use <code>**bold**</code> for UI labels and <code>`code`</code> for typed values.</p>
+    {#if step.text_edited}
+      <button class="ghost small reset" onclick={resetText} title="Replace with the automatic text from the narration and on-screen labels">
+        Reset to automatic text
+      </button>
+    {/if}
+  </div>
+
+  {#if step.transcript || step.ocr || step.tooltip}
+    <div class="section">
+      <div class="label">Context</div>
+      <dl class="context">
+        {#if step.transcript}
+          <dt>You said</dt>
+          <dd>
+            <span>“{step.transcript}”</span>
+            <button class="ghost small" onclick={() => useText(sentence(step.transcript!))}>Use</button>
+          </dd>
+        {/if}
+        {#if step.ocr}
+          <dt>Clicked on</dt>
+          <dd>
+            <span><b>{step.ocr}</b></span>
+            <button class="ghost small" onclick={() => useText(`${verb()} **${step.ocr}**.`)}>Use</button>
+          </dd>
+        {/if}
+        {#if step.tooltip}
+          <dt>Tooltip</dt>
+          <dd>
+            <span>{step.tooltip}</span>
+            <button class="ghost small" onclick={() => useText(`${verb()} **${step.tooltip}**.`)}>Use</button>
+          </dd>
+        {/if}
+      </dl>
+    </div>
+  {/if}
+
+  <div class="section">
+    <div class="row">
+      <span class="label">Notes</span>
+      {#if step.annotations.length > 1}
+        <button class="ghost small" onclick={() => (step.annotations = [])}>Remove all</button>
+      {/if}
+    </div>
+    {#if step.annotations.length === 0 && !step.crop}
+      <p class="hint">Draw arrows, boxes, markers and redactions with the tools above the image.</p>
+    {:else}
+      <ul class="notes">
+        {#each step.annotations as a, i}
+          <li>
+            <span class="swatch {a.type}"></span>
+            <span>{noteLabels[a.type]}</span>
+            <button class="ghost small" title="Delete this note" onclick={() => step.annotations.splice(i, 1)}>✕</button>
+          </li>
+        {/each}
+        {#if step.crop}
+          <li>
+            <span class="swatch crop"></span>
+            <span>Custom crop</span>
+            <button class="ghost small" title="Go back to the default crop" onclick={() => (step.crop = undefined)}>✕</button>
+          </li>
+        {/if}
+      </ul>
+    {/if}
   </div>
 
   <div class="section">
@@ -195,6 +283,70 @@
   }
   .clip {
     font-size: 13px;
+  }
+  .reset {
+    justify-self: start;
+  }
+  .context {
+    grid-template-columns: 72px 1fr;
+  }
+  .context dd {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    justify-content: space-between;
+    white-space: normal;
+  }
+  .context dd span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .notes {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .notes li {
+    display: grid;
+    grid-template-columns: 14px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 4px 4px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .notes li:hover {
+    background: var(--panel-2);
+  }
+  .swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    border: 2px solid var(--accent);
+  }
+  .swatch.marker {
+    border-radius: 50%;
+  }
+  .swatch.arrow {
+    border: none;
+    height: 3px;
+    background: var(--accent);
+    transform: rotate(-30deg);
+  }
+  .swatch.blur {
+    border: none;
+    background: #202024;
+  }
+  .swatch.crop {
+    border-color: var(--muted);
+    border-style: dashed;
+  }
+  .small {
+    padding: 3px 8px;
+    font-size: 12px;
+    color: var(--muted);
   }
   .muted {
     color: var(--muted);

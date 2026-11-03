@@ -4,6 +4,7 @@
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
   import { onMount } from 'svelte'
   import { api, type ExportFormat, type Manifest } from './api'
+  import { qualityLabel, settings } from './settings.svelte'
 
   let { manifest, hasVideo, onclose, onsaved }: {
     manifest: Manifest
@@ -62,7 +63,14 @@
     running = true
     try {
       const snapshot = $state.snapshot(manifest)
-      await api.exportProject({ manifest: snapshot, formats: selected, out_dir: outDir, full_frame: fullFrame })
+      await api.exportProject({
+        manifest: snapshot,
+        formats: selected,
+        out_dir: outDir,
+        full_frame: fullFrame,
+        quality: settings.quality,
+        max_width: settings.exportWidth,
+      })
       // Exporting saves the project first.
       onsaved(JSON.stringify(snapshot))
     } catch (e) {
@@ -106,6 +114,9 @@
           {clipCount > 0
             ? `Video: ${clipCount} step clip${clipCount > 1 ? 's' : ''} stitched in step order.`
             : 'Video: the whole recording (set clips on steps to trim it).'}
+          Quality {settings.quality} ({qualityLabel(settings.quality)}), {settings.exportWidth
+            ? `up to ${settings.exportWidth} px wide`
+            : 'original size'}; change these in Settings.
         </p>
       {/if}
     </div>

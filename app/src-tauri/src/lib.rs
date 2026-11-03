@@ -16,6 +16,7 @@ use openscrib_core::{Manifest, PROJECT_EXT, ProjectDir, Rect};
 use openscrib_export::render::{CropMode, RenderOptions, default_crop};
 use openscrib_export::video::{VideoExportOptions, VideoFormat, export_video, remux_to_mp4};
 use openscrib_export::Guide;
+use openscrib_process::{ProcessOptions, models};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -182,6 +183,9 @@ struct ExportRequest {
     formats: Vec<String>,
     out_dir: String,
     full_frame: bool,
+    quality: u8,
+    /// 0 keeps the recording's own width.
+    max_width: u32,
 }
 
 #[derive(Clone, Serialize)]
@@ -259,7 +263,9 @@ fn run_export(app: &AppHandle, dir: &ProjectDir, req: ExportRequest) -> anyhow::
                     .ok_or_else(|| anyhow::anyhow!("video export needs {}", video::OPENH264_DLL))?;
                 let (fmt, name) = if f == "mkv" { (VideoFormat::Mkv, "guide.mkv") } else { (VideoFormat::Mp4, "guide.mp4") };
                 let p = out.join(name);
-                let opts = VideoExportOptions::new(dll, fmt);
+                let mut opts = VideoExportOptions::new(dll, fmt);
+                opts.quality = req.quality.clamp(1, 100);
+                opts.max_width = if req.max_width == 0 { u32::MAX } else { req.max_width };
                 export_video(dir, &manifest, &opts, &p, |k| progress(f, k))?;
                 p
             }
@@ -277,6 +283,7 @@ struct RecordRequest {
     audio: bool,
     monitor: Option<u32>,
     mic: Option<String>,
+    quality: u8,
 }
 
 #[tauri::command]
@@ -299,7 +306,7 @@ fn start_recording(app: AppHandle, state: State<AppState>, req: RecordRequest) -
     if req.video
         && let Some(openh264) = video::locate_openh264()
     {
-        media.video = Some(VideoConfig { monitor: req.monitor, fps: 12, openh264 });
+        media.video = Some(VideoConfig { monitor: req.monitor, fps: 12, openh264, quality: req.quality.clamp(1, 100) });
     }
     if req.audio {
         media.audio = Some(AudioConfig { device: req.mic });
@@ -360,6 +367,100 @@ fn list_devices() -> CmdResult<Devices> {
     })
 }
 
+#[derive(Serialize)]
+struct ModelStatus {
+    #[serde(flatten)]
+    info: models::ModelInfo,
+    installed: bool,
+}
+
+#[tauri::command]
+fn list_models() -> Vec<ModelStatus> {
+    models::CATALOG
+        .iter()
+        .map(|m| ModelStatus { info: *m, installed: models::installed(m) })
+        .collect()
+}
+
+#[derive(Clone, Serialize)]
+struct ModelProgress {
+    id: String,
+    done: u64,
+    total: Option<u64>,
+}
+
+#[derive(Clone, Serialize)]
+struct ModelFailed {
+    id: String,
+    error: String,
+}
+
+#[tauri::command]
+fn download_model(app: AppHandle, id: String) -> CmdResult<()> {
+    let m = models::find(&id).ok_or_else(|| format!("unknown model {id}"))?;
+    std::thread::spawn(move || {
+        let mut last = 0u64;
+        let result = models::download(m, |done, total| {
+            // About one event per percent is plenty for a progress bar.
+            let step = total.map_or(1 << 20, |t| (t / 100).max(1));
+            if done - last >= step || Some(done) == total {
+                last = done;
+                let _ = app.emit("model-progress", ModelProgress { id: id.clone(), done, total });
+            }
+        });
+        match result {
+            Ok(_) => {
+                let _ = app.emit("model-done", id);
+            }
+            Err(e) => {
+                let _ = app.emit("model-failed", ModelFailed { id, error: err(e) });
+            }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn remove_model(id: String) -> CmdResult<()> {
+    let m = models::find(&id).ok_or_else(|| format!("unknown model {id}"))?;
+    models::remove(m).map_err(err)
+}
+
+#[derive(Clone, Serialize)]
+struct ProcessDone {
+    manifest: Manifest,
+    report: openscrib_process::Report,
+}
+
+/// Run narration and OCR over the open project's current (unsaved) state;
+/// the processed manifest comes back in a `process-done` event.
+#[tauri::command]
+fn process_project(app: AppHandle, state: State<AppState>, manifest: Manifest, whisper: Option<String>) -> CmdResult<()> {
+    let dir = with_project(&state, |p| Ok(p.dir.clone()))?;
+    std::thread::spawn(move || {
+        let mut manifest = manifest;
+        let opts = ProcessOptions::installed(whisper.as_deref());
+        let result = openscrib_process::process(&dir, &mut manifest, &opts, |p| {
+            let _ = app.emit("process-progress", p);
+        });
+        match result {
+            Ok(report) => {
+                let _ = app.emit("process-done", ProcessDone { manifest, report });
+            }
+            Err(e) => {
+                let _ = app.emit("process-failed", err(e));
+            }
+        }
+    });
+    Ok(())
+}
+
+/// The automatic text for a step, for "Reset to draft" in the editor.
+#[tauri::command]
+fn draft_text(step: openscrib_core::Step) -> String {
+    step.draft_text()
+}
+
 #[tauri::command]
 fn default_export_dir(state: State<AppState>) -> CmdResult<String> {
     with_project(&state, |p| {
@@ -388,6 +489,11 @@ pub fn run() {
             stop_recording,
             list_devices,
             default_export_dir,
+            list_models,
+            download_model,
+            remove_model,
+            process_project,
+            draft_text,
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpenSCRIB")

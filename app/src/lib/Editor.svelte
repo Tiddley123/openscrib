@@ -1,12 +1,21 @@
 <script lang="ts">
+  import { listen } from '@tauri-apps/api/event'
   import { onMount } from 'svelte'
-  import { api, type ProjectView, type Rect } from './api'
+  import { api, type Manifest, type ProcessProgress, type ProcessReport, type ProjectView, type Rect } from './api'
+  import { settings } from './settings.svelte'
   import ExportDialog from './ExportDialog.svelte'
   import Inspector from './Inspector.svelte'
   import StepCanvas from './StepCanvas.svelte'
   import StepList from './StepList.svelte'
 
-  let { project = $bindable(), onclose }: { project: ProjectView; onclose: () => void } = $props()
+  let { project = $bindable(), onclose, onsettings }: {
+    project: ProjectView
+    onclose: () => void
+    onsettings: () => void
+  } = $props()
+
+  const DEFAULT_HIGHLIGHT = '#ff5c35'
+  let highlight = $derived(project.manifest.accent ?? DEFAULT_HIGHLIGHT)
 
   // Per-step data from the backend is indexed by the original order; key it
   // by step id so it survives reordering.
@@ -60,6 +69,46 @@
     onclose()
   }
 
+  // Process: narration + on-screen text → draft step text.
+  let processing = $state<ProcessProgress | null>(null)
+  let processResult = $state<{ report: ProcessReport } | { error: string } | null>(null)
+
+  async function runProcess() {
+    processResult = null
+    processing = { stage: 'start', fraction: 0, message: 'Starting' }
+    try {
+      await api.processProject($state.snapshot(project.manifest), settings.whisperModel)
+    } catch (e) {
+      processing = null
+      processResult = { error: String(e) }
+    }
+  }
+
+  function summary(r: ProcessReport): string {
+    const parts = []
+    if (r.labels) parts.push(`read ${r.labels} on-screen label${r.labels > 1 ? 's' : ''}`)
+    if (r.tooltips) parts.push(`${r.tooltips} tooltip${r.tooltips > 1 ? 's' : ''}`)
+    if (r.steps_with_narration) parts.push(`narration on ${r.steps_with_narration} step${r.steps_with_narration > 1 ? 's' : ''}`)
+    const what = parts.length ? parts.join(', ') : 'found nothing new'
+    return `Processed: ${what}. ${r.redrafted} step${r.redrafted === 1 ? '' : 's'} redrafted; edited text was left alone.`
+  }
+
+  onMount(() => {
+    const un = [
+      listen<ProcessProgress>('process-progress', (e) => (processing = e.payload)),
+      listen<{ manifest: Manifest; report: ProcessReport }>('process-done', (e) => {
+        processing = null
+        project.manifest = e.payload.manifest
+        processResult = { report: e.payload.report }
+      }),
+      listen<string>('process-failed', (e) => {
+        processing = null
+        processResult = { error: e.payload }
+      }),
+    ]
+    return () => un.forEach((p) => p.then((f) => f()))
+  })
+
   onMount(() => {
     const onkey = (e: KeyboardEvent) => {
       const typing = e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement
@@ -91,9 +140,49 @@
     <span class="status" class:dirty>
       {#if saving}Saving…{:else if saveError}Save failed{:else if dirty}Unsaved changes{:else}Saved{/if}
     </span>
+    <label class="highlight" title="Highlight colour for markers, shapes and step numbers in this guide and its exports">
+      <span class="chip" style:background={highlight}></span>
+      Highlight
+      <input
+        type="color"
+        value={highlight}
+        oninput={(e) => {
+          const v = e.currentTarget.value
+          project.manifest.accent = v === DEFAULT_HIGHLIGHT ? undefined : v
+        }}
+      />
+    </label>
+    <button class="ghost" onclick={onsettings}>Settings</button>
+    <button
+      onclick={runProcess}
+      disabled={processing !== null || project.manifest.steps.length === 0}
+      title="Transcribe narration and read on-screen labels, then redraft step text you haven't edited"
+    >
+      ✦ Process
+    </button>
     <button onclick={save} disabled={!dirty || saving} title="Save (Ctrl+S)">Save</button>
     <button class="primary" onclick={() => (exporting = true)} disabled={project.manifest.steps.length === 0}>Export</button>
   </header>
+
+  {#if processing}
+    <div class="banner">
+      <span class="spinner"></span>
+      <span>{processing.message}…</span>
+      <span class="bar"><span style:width="{Math.round(processing.fraction * 100)}%"></span></span>
+    </div>
+  {:else if processResult}
+    <div class="banner" class:error={'error' in processResult}>
+      {#if 'error' in processResult}
+        <span>Processing failed: {processResult.error}</span>
+      {:else}
+        <span>{summary(processResult.report)}</span>
+        {#each processResult.report.skipped as s}
+          <span class="skip">{s}. <button class="link" onclick={onsettings}>Get models</button></span>
+        {/each}
+      {/if}
+      <button class="ghost dismiss" onclick={() => (processResult = null)}>✕</button>
+    </div>
+  {/if}
 
   {#if project.manifest.warnings?.length}
     <div class="warnings">
@@ -119,6 +208,7 @@
             workDir={project.work_dir}
             size={sizeById.get(step.id) ?? null}
             defaultCrop={cropById.get(step.id) ?? null}
+            {highlight}
           />
         {/key}
       {:else}
@@ -185,6 +275,32 @@
   .title:hover {
     border-color: var(--line);
   }
+  .highlight {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    color: var(--ink-2);
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .highlight:hover {
+    background: var(--panel-2);
+  }
+  .highlight .chip {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--line-strong);
+  }
+  .highlight input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
   .status {
     color: var(--muted);
     font-size: 12.5px;
@@ -192,6 +308,59 @@
   }
   .status.dirty {
     color: var(--accent);
+  }
+  .banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--accent-soft);
+    font-size: 13px;
+  }
+  .banner.error {
+    background: color-mix(in srgb, var(--danger) 12%, var(--panel));
+  }
+  .banner .bar {
+    flex: 0 0 160px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--line);
+    overflow: hidden;
+  }
+  .banner .bar span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.2s;
+  }
+  .banner .skip {
+    color: var(--ink-2);
+  }
+  .banner .link {
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--accent);
+    text-decoration: underline;
+  }
+  .banner .dismiss {
+    margin-left: auto;
+    padding: 2px 8px;
+  }
+  .spinner {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--line-strong);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .warnings {
     background: var(--accent-soft);

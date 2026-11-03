@@ -112,12 +112,13 @@ impl Guide {
             src.push_str(&format!(
                 r##"#block(breakable: false, below: 20pt)[
   #grid(columns: (20pt, 1fr), column-gutter: 9pt,
-    box(width: 20pt, height: 20pt, radius: 10pt, fill: rgb("#ff5c35"),
+    box(width: 20pt, height: 20pt, radius: 10pt, fill: rgb({accent}),
       align(center + horizon, text(fill: white, weight: "bold", size: 9.5pt)[{n}])),
     pad(top: 2.5pt)[{text}])
   {image}]
 "##,
                 n = s.number,
+                accent = typst_str(&self.accent),
                 text = inline_typst(&s.text),
                 image = image.unwrap_or_default(),
             ));
@@ -195,6 +196,7 @@ mod tests {
             .unwrap();
         let guide = Guide {
             title: "Reset a \"password\" #1".into(),
+            accent: "#0a84ff".into(),
             steps: vec![
                 GuideStep {
                     number: 1,

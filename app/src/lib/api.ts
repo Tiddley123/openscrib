@@ -45,6 +45,7 @@ export interface Step {
   frame?: string
   pre_frame?: string
   transcript?: string
+  tooltip?: string
   ocr?: string
   vision?: string
   text: string
@@ -66,6 +67,7 @@ export interface Manifest {
   version: number
   app_version: string
   title?: string
+  accent?: string
   created: string
   duration_ms: number
   monitors: MonitorInfo[]
@@ -99,6 +101,40 @@ export interface Devices {
   video_available: boolean
 }
 
+export interface RecordRequest {
+  video: boolean
+  audio: boolean
+  monitor: number | null
+  mic: string | null
+  quality: number
+}
+
+export interface ModelStatus {
+  id: string
+  kind: 'whisper' | 'ocr_detection' | 'ocr_recognition'
+  label: string
+  note: string
+  file: string
+  url: string
+  size_mb: number
+  installed: boolean
+}
+
+export interface ProcessReport {
+  segments: number
+  steps_with_narration: number
+  labels: number
+  tooltips: number
+  redrafted: number
+  skipped: string[]
+}
+
+export interface ProcessProgress {
+  stage: string
+  fraction: number
+  message: string
+}
+
 export type ExportFormat = 'md' | 'html' | 'pdf' | 'mkv' | 'mp4'
 
 const dev = import.meta.env.DEV && !inTauri
@@ -107,13 +143,25 @@ export const api = {
   listRecordings: () => (dev ? mockApi.listRecordings() : invoke<RecentItem[]>('list_recordings')),
   openProject: (path: string) => (dev ? mockApi.openProject() : invoke<ProjectView>('open_project', { path })),
   saveProject: (manifest: Manifest) => invoke<void>('save_project', { manifest }),
-  exportProject: (req: { manifest: Manifest; formats: ExportFormat[]; out_dir: string; full_frame: boolean }) =>
+  exportProject: (req: {
+    manifest: Manifest
+    formats: ExportFormat[]
+    out_dir: string
+    full_frame: boolean
+    quality: number
+    max_width: number
+  }) =>
     invoke<void>('export_project', { req }),
-  startRecording: (req: { video: boolean; audio: boolean; monitor: number | null; mic: string | null }) =>
+  startRecording: (req: RecordRequest) =>
     invoke<string>('start_recording', { req }),
   stopRecording: () => invoke<void>('stop_recording'),
   listDevices: () => (dev ? mockApi.listDevices() : invoke<Devices>('list_devices')),
   defaultExportDir: () => (dev ? mockApi.defaultExportDir() : invoke<string>('default_export_dir')),
+  listModels: () => (dev ? mockApi.listModels() : invoke<ModelStatus[]>('list_models')),
+  downloadModel: (id: string) => invoke<void>('download_model', { id }),
+  removeModel: (id: string) => invoke<void>('remove_model', { id }),
+  processProject: (manifest: Manifest, whisper: string | null) => invoke<void>('process_project', { manifest, whisper }),
+  draftText: (step: Step) => invoke<string>('draft_text', { step }),
 }
 
 /** URL the WebView can load for a file inside the open project. */

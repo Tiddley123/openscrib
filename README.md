@@ -16,15 +16,35 @@ cd app && npm install && npx tauri build --no-bundle
 This builds `target/release/openscrib-app.exe`. From the editor you can record, open and save projects, and:
 
 - **Steps:** drag to reorder, delete, edit the text (with `**bold**` and `` `code` ``).
-- **Annotations:** draw arrows, boxes and markers, redact private areas (pixelated on export), or set a custom crop.
+- **Annotations:** draw arrows, boxes and markers, redact private areas (painted solid on export), or set a custom crop. To delete one, use the ✕ in the Notes list, right-click it, or select it and press Delete.
 - **Clips:** trim each step's video against a preview, or click **Auto**.
+- **✦ Process:** transcribe your narration and read the label under each click, then redraft any step text you haven't edited.
 - **Export:** PDF, HTML, Markdown, MP4 and MKV.
+- **Settings:** theme (system, light or dark), accent colour, video quality, exported video size, and models to download. Each guide also has its own highlight colour.
 
 For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on its own works in a plain browser too, against a mock backend fed from `app/dev-mock/`.
 
+## Status: M4 (narration and on-screen text)
+
+- [x] Model manager: Whisper (tiny, base, small, medium, large-v3-turbo) and the OCR models, downloaded on demand into the portable `models/` folder (`openscrib models`, or Settings in the editor)
+- [x] Narration decoded from the recording, transcribed with whisper.cpp, and matched to the nearest step. Silence and sound tags like `[typing]` are dropped
+- [x] OCR (pure-Rust `ocrs`) reads the label under each click, and any tooltip that appeared before it
+- [x] Step text drafted from these, with no language model: "Click **This PC**." instead of "Click in **…Remote Desktop…**". Text you've edited is never overwritten
+- [ ] Icons with no text (Start button, toolbar glyphs) still read "Click here"; the vision model in M5 handles those
+
+### Building with Whisper on Windows
+
+whisper.cpp needs CMake, and its Rust bindings need `libclang` (from LLVM). If bindgen can't find headers, set paths in a local `.cargo/config.toml`:
+
+```toml
+[env]
+LIBCLANG_PATH = "C:/Program Files/LLVM/bin"
+BINDGEN_EXTRA_CLANG_ARGS = '"-IC:/Program Files/LLVM/lib/clang/23/include" "-I<MSVC>/include" "-I<Windows Kits>/Include/<ver>/ucrt"'
+```
+
 ## Status: M3 (editor and exports)
 
-- [x] Step images: window-aware crop (with limits on very wide or tall shapes), per-step crop override, annotations, and irreversible pixelation for redaction
+- [x] Step images: window-aware crop (with limits on very wide or tall shapes), per-step crop override, annotations, and solid redaction
 - [x] Markdown (folder of images), HTML (one self-contained file, light and dark), PDF (Typst, compiled in-process, works offline)
 - [x] Video export: step clips stitched in step order (or the whole recording), drawn cursor and click ripples, scaled to 1920 px wide, narration copied as-is. MKV, or MP4 with the index at the front (checked with Mozilla's `mp4parse`)
 - [x] Tauri 2 + Svelte 5 editor covering everything above, plus recording from the app (clicks on the editor itself are ignored)
@@ -99,7 +119,8 @@ the unpacked working directory. If a recording crashes, run
 | `openscrib-core` | Clock, `project.json` schema, `.scrib` pack and unpack, click markers. Has no OS dependencies. |
 | `openscrib-capture` | Input hooks, screen capture, window lookup, and the `Session` step state machine |
 | `openscrib-export` | Step image rendering, Markdown/HTML/PDF guides, video export, MP4 remux |
-| `openscrib-cli` | The `openscrib` binary (`record`, `export`, `info`, `probe`, `markers`, `pack`, `devices`) |
+| `openscrib-process` | Model downloads, Whisper transcription, OCR, drafting step text |
+| `openscrib-cli` | The `openscrib` binary (`record`, `export`, `process`, `models`, `info`, `probe`, `markers`, `pack`, `devices`) |
 | `app/` | Tauri 2 + Svelte 5 editor (`app/src-tauri` is the Rust side) |
 
 

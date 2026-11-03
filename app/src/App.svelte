@@ -5,11 +5,13 @@
   import { api, type ProjectView } from './lib/api'
   import Editor from './lib/Editor.svelte'
   import Home from './lib/Home.svelte'
+  import SettingsDialog from './lib/SettingsDialog.svelte'
 
   let project = $state<ProjectView | null>(null)
   let recording = $state(false)
   let error = $state<string | null>(null)
   let busy = $state<string | null>(null)
+  let settingsOpen = $state(false)
 
   async function open(path: string) {
     error = null
@@ -62,9 +64,13 @@
     <button class="primary" onclick={() => api.stopRecording()}>Stop recording</button>
   </main>
 {:else if project}
-  <Editor bind:project onclose={() => (project = null)} />
+  <Editor bind:project onclose={() => (project = null)} onsettings={() => (settingsOpen = true)} />
 {:else}
-  <Home onopen={open} onrecord={startRecording} />
+  <Home onopen={open} onrecord={startRecording} onsettings={() => (settingsOpen = true)} />
+{/if}
+
+{#if settingsOpen}
+  <SettingsDialog onclose={() => (settingsOpen = false)} />
 {/if}
 
 {#if busy}
@@ -102,12 +108,12 @@
     height: 18px;
     border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 0 0 rgba(255, 92, 53, 0.5);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent);
     animation: pulse 1.6s infinite;
   }
   @keyframes pulse {
     to {
-      box-shadow: 0 0 0 18px rgba(255, 92, 53, 0);
+      box-shadow: 0 0 0 18px transparent;
     }
   }
   .toast {

@@ -4,19 +4,21 @@
 
   type Tool = 'select' | 'marker' | 'arrow' | 'box' | 'blur' | 'crop'
 
-  let { step = $bindable(), workDir, size, defaultCrop }: {
+  let { step = $bindable(), workDir, size, defaultCrop, highlight }: {
     step: Step
     workDir: string
     size: [number, number] | null
     defaultCrop: Rect | null
+    /** Project highlight colour for markers and shapes. */
+    highlight: string
   } = $props()
 
   const tools: { id: Tool; label: string; key: string; hint: string }[] = [
-    { id: 'select', label: 'Select', key: 'V', hint: 'Select a note, then Delete to remove it' },
+    { id: 'select', label: 'Select', key: 'V', hint: 'Click a note to select it, then Delete. Right-click any note to delete it.' },
     { id: 'arrow', label: 'Arrow', key: 'A', hint: 'Drag from tail to tip' },
     { id: 'box', label: 'Box', key: 'B', hint: 'Drag to outline an area' },
     { id: 'marker', label: 'Marker', key: 'M', hint: 'Click to add a ring' },
-    { id: 'blur', label: 'Redact', key: 'R', hint: 'Drag over anything private; it is pixelated in exports' },
+    { id: 'blur', label: 'Redact', key: 'R', hint: 'Drag over anything private; exports paint it out solid' },
     { id: 'crop', label: 'Crop', key: 'C', hint: 'Drag the region exports should show' },
   ]
 
@@ -119,6 +121,12 @@
     else if (tool === 'crop') step.crop = rectOf(from, to)
   }
 
+  function removeNote(i: number) {
+    step.annotations.splice(i, 1)
+    if (selected === i) selected = null
+    else if (selected !== null && selected > i) selected -= 1
+  }
+
   function pick(e: PointerEvent, i: number) {
     if (tool !== 'select') return
     e.stopPropagation()
@@ -157,6 +165,9 @@
         <input type="checkbox" bind:checked={showPre} /> Before click
       </label>
     {/if}
+    {#if selected !== null}
+      <button class="danger" onclick={() => selected !== null && removeNote(selected)}>Delete note</button>
+    {/if}
     {#if step.crop}
       <button class="ghost" onclick={() => (step.crop = undefined)}>Reset crop</button>
     {/if}
@@ -186,8 +197,8 @@
       >
         <defs>
           <pattern id="hatch" width={12 * k} height={12 * k} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <rect width={12 * k} height={12 * k} fill="rgba(30,30,32,0.82)" />
-            <line x1="0" y1="0" x2="0" y2={12 * k} stroke="rgba(255,255,255,0.18)" stroke-width={5 * k} />
+            <rect width={12 * k} height={12 * k} fill="#202024" />
+            <line x1="0" y1="0" x2="0" y2={12 * k} stroke="#2c2c31" stroke-width={5 * k} />
           </pattern>
         </defs>
 
@@ -219,17 +230,21 @@
             tabindex="-1"
             aria-label="{a.type} note"
             onpointerdown={(e) => pick(e, i)}
+            oncontextmenu={(e) => {
+              e.preventDefault()
+              removeNote(i)
+            }}
           >
             {#if a.type === 'blur'}
               <rect x={a.rect.x} y={a.rect.y} width={a.rect.w} height={a.rect.h} fill="url(#hatch)" />
             {:else if a.type === 'box'}
-              <rect x={a.rect.x} y={a.rect.y} width={a.rect.w} height={a.rect.h} fill="none" stroke="#ff5c35" stroke-width={4 * k} />
+              <rect x={a.rect.x} y={a.rect.y} width={a.rect.w} height={a.rect.h} fill="none" stroke={highlight} stroke-width={4 * k} />
             {:else if a.type === 'arrow'}
-              <line x1={a.from.x} y1={a.from.y} x2={a.to.x} y2={a.to.y} stroke="#ff5c35" stroke-width={5 * k} stroke-linecap="round" />
-              <polyline points={head(a.from, a.to)} fill="none" stroke="#ff5c35" stroke-width={5 * k} stroke-linecap="round" stroke-linejoin="round" />
+              <line x1={a.from.x} y1={a.from.y} x2={a.to.x} y2={a.to.y} stroke={highlight} stroke-width={5 * k} stroke-linecap="round" />
+              <polyline points={head(a.from, a.to)} fill="none" stroke={highlight} stroke-width={5 * k} stroke-linecap="round" stroke-linejoin="round" />
             {:else if a.type === 'marker'}
               <circle cx={a.at.x} cy={a.at.y} r={30} fill="none" stroke="#fff" stroke-width={7} opacity="0.9" />
-              <circle cx={a.at.x} cy={a.at.y} r={30} fill="none" stroke="#ff5c35" stroke-width={4} />
+              <circle cx={a.at.x} cy={a.at.y} r={30} fill="none" stroke={highlight} stroke-width={4} />
             {/if}
           </g>
         {/each}
@@ -241,7 +256,7 @@
             cy={step.click.in_frame.y}
             r={30}
             fill="none"
-            stroke={step.click.button === 'right' ? '#3584ff' : '#ff5c35'}
+            stroke={step.click.button === 'right' ? '#3584ff' : highlight}
             stroke-width={4}
             pointer-events="none"
           />
@@ -250,7 +265,7 @@
         {#if draft}
           {@const r = rectOf(draft.from, draft.to)}
           {#if tool === 'arrow'}
-            <line x1={draft.from.x} y1={draft.from.y} x2={draft.to.x} y2={draft.to.y} stroke="#ff5c35" stroke-width={5 * k} stroke-linecap="round" />
+            <line x1={draft.from.x} y1={draft.from.y} x2={draft.to.x} y2={draft.to.y} stroke={highlight} stroke-width={5 * k} stroke-linecap="round" />
           {:else}
             <rect
               x={r.x}
@@ -258,7 +273,7 @@
               width={r.w}
               height={r.h}
               fill={tool === 'blur' ? 'url(#hatch)' : 'none'}
-              stroke={tool === 'crop' ? '#fff' : '#ff5c35'}
+              stroke={tool === 'crop' ? '#fff' : highlight}
               stroke-width={2 * k}
               stroke-dasharray="{6 * k} {4 * k}"
             />
@@ -358,7 +373,7 @@
     cursor: pointer;
   }
   .ann.sel {
-    filter: drop-shadow(0 0 6px #ff5c35) drop-shadow(0 0 2px #fff);
+    filter: drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 2px #fff);
   }
   .noframe {
     color: var(--muted);

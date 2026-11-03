@@ -20,11 +20,10 @@ use openscrib_core::mkv::{
 };
 use openscrib_core::mp4::Mp4Writer;
 use openscrib_core::project::{EVENTS_FILE, SCREEN_FILE};
-use openscrib_core::{Manifest, Point, ProjectDir};
+use openscrib_core::{Manifest, Point, ProjectDir, quality};
 
 use crate::render::stroke_segment;
 
-const ACCENT: [u8; 3] = [255, 92, 53];
 const RIPPLE_MS: u64 = 450;
 const IDR_INTERVAL_MS: u64 = 10_000;
 
@@ -44,11 +43,13 @@ pub struct VideoExportOptions {
     pub max_fps: u32,
     pub cursor: bool,
     pub clicks: bool,
+    /// 1..=100, see `openscrib_core::quality`.
+    pub quality: u8,
 }
 
 impl VideoExportOptions {
     pub fn new(openh264: PathBuf, format: VideoFormat) -> Self {
-        Self { openh264, format, max_width: 1920, max_fps: 15, cursor: true, clicks: true }
+        Self { openh264, format, max_width: 1920, max_fps: 15, cursor: true, clicks: true, quality: quality::DEFAULT_QUALITY }
     }
 }
 
@@ -173,6 +174,7 @@ pub fn export_video(
     let video_info = manifest.video.as_ref().context("this project has no screen video")?;
     let origin = manifest.monitor(video_info.monitor).map_or(Point::new(0, 0), |m| m.rect.origin());
     let ui_scale = manifest.monitor(video_info.monitor).map_or(1.0, |m| m.scale).max(1.0);
+    let accent = manifest.accent_rgb();
 
     let (video, audio) = demux(&dir.path(SCREEN_FILE))?;
     if video.is_empty() {
@@ -188,10 +190,13 @@ pub fn export_video(
 
     let api = || OpenH264API::from_blob_path(&opts.openh264).with_context(|| format!("loading {}", opts.openh264.display()));
     let mut decoder = Decoder::with_api_config(api()?, DecoderConfig::new()).context("creating decoder")?;
+    let (qp_min, qp_max) = quality::qp_range(opts.quality);
     let config = EncoderConfig::new()
         // Cisco's build rejects ScreenContentNonRealTime ("invalid usage type").
         .usage_type(UsageType::ScreenContentRealTime)
         .rate_control_mode(RateControlMode::Quality)
+        .bitrate(openh264::encoder::BitRate::from_bps(quality::bitrate(opts.quality, out_w, out_h, opts.max_fps)))
+        .qp(openh264::encoder::QpRange::new(qp_min, qp_max))
         .max_frame_rate(openh264::encoder::FrameRate::from_hz(opts.max_fps as f32))
         .skip_frames(false);
     let mut encoder = Encoder::with_api_config(api()?, config).context("creating encoder")?;
@@ -275,7 +280,7 @@ pub fn export_video(
                 if opts.clicks {
                     for (p, k) in pointer.ripples(t) {
                         let at = ((p.x - origin.x) as f32 * scale, (p.y - origin.y) as f32 * scale);
-                        draw_ripple(&mut frame, at, k, ui_scale);
+                        draw_ripple(&mut frame, at, k, ui_scale, accent);
                     }
                 }
                 if let Some(at) = cursor {
@@ -434,7 +439,7 @@ fn draw_cursor(img: &mut RgbaImage, at: (f32, f32), scale: f32) {
     fill_polygon(img, &pts, [255, 255, 255]);
 }
 
-fn draw_ripple(img: &mut RgbaImage, at: (f32, f32), progress: f32, scale: f32) {
+fn draw_ripple(img: &mut RgbaImage, at: (f32, f32), progress: f32, scale: f32, color: [u8; 3]) {
     let r = (10.0 + 26.0 * progress) * scale;
     let alpha = (1.0 - progress).powf(1.5);
     let ring = 3.5 * scale;
@@ -445,7 +450,7 @@ fn draw_ripple(img: &mut RgbaImage, at: (f32, f32), progress: f32, scale: f32) {
             let d = ((x as f32 + 0.5 - at.0).powi(2) + (y as f32 + 0.5 - at.1).powi(2)).sqrt();
             let a = ((ring / 2.0 - (d - r).abs() + 0.5).clamp(0.0, 1.0)) * alpha;
             if a > 0.0 {
-                blend(img.get_pixel_mut(x as u32, y as u32), ACCENT, a);
+                blend(img.get_pixel_mut(x as u32, y as u32), color, a);
             }
         }
     }

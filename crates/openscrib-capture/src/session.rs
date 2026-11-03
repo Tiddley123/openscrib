@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(c.in_window, Some(Point::new(800, 400)));
         assert_eq!(s.monitor, Some(7));
         assert_eq!(s.pre_frame.as_deref(), Some("frames/0001_pre.png"));
-        assert_eq!(s.text, "Click in **remote-pc - TeamViewer**.");
+        assert_eq!(s.text, "Click here."); // remote viewer titles are not step text
         assert_eq!(saved, ["frames/0001.png", "frames/0001_pre.png"]);
         assert_eq!(m.monitors.len(), 1);
     }

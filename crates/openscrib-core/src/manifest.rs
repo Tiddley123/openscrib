@@ -145,8 +145,12 @@ pub struct Step {
     pub pre_frame: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<String>,
+    /// Label read under the click.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ocr: Option<String>,
+    /// Text that appeared near the cursor before the click (tooltips).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<String>,
     pub text: String,
@@ -176,6 +180,7 @@ impl Step {
             pre_frame: None,
             transcript: None,
             ocr: None,
+            tooltip: None,
             vision: None,
             text: String::new(),
             text_edited: false,
@@ -185,11 +190,20 @@ impl Step {
         }
     }
 
-    /// Draft text from capture data alone (the zero-model core tier).
+    /// Draft text without a language model: the label read under the click
+    /// (OCR), then the tooltip, then the narration, then the window title.
     pub fn draft_text(&self) -> String {
-        let target = self
+        let label = self
+            .ocr
+            .as_deref()
+            .or(self.tooltip.as_deref())
+            .map(str::trim)
+            .filter(|t| !t.is_empty());
+        let narration = self.transcript.as_deref().map(sentence).filter(|t| !t.is_empty());
+        let window = self
             .window
             .as_ref()
+            .filter(|w| !is_remote_viewer(&w.process))
             .map(|w| w.title.trim())
             .filter(|t| !t.is_empty());
         match self.kind {
@@ -200,9 +214,11 @@ impl Step {
                     Some(Click { button: MouseButton::Middle, .. }) => "Middle-click",
                     _ => "Click",
                 };
-                match target {
-                    Some(t) => format!("{verb} in **{t}**."),
-                    None => format!("{verb} here."),
+                match (label, narration, window) {
+                    (Some(l), _, _) => format!("{verb} **{l}**."),
+                    (None, Some(n), _) => n,
+                    (None, None, Some(t)) => format!("{verb} in **{t}**."),
+                    (None, None, None) => format!("{verb} here."),
                 }
             }
             StepKind::Typed => format!("Type `{}`.", self.keys.as_deref().unwrap_or("")),
@@ -249,6 +265,9 @@ pub struct Manifest {
     pub app_version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Highlight colour for markers, shapes and step badges, as `#rrggbb`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created: OffsetDateTime,
     pub duration_ms: u64,
@@ -268,6 +287,7 @@ impl Manifest {
             version: MANIFEST_VERSION,
             app_version: app_version.into(),
             title: None,
+            accent: None,
             created: OffsetDateTime::now_utc(),
             duration_ms: 0,
             monitors: Vec::new(),
@@ -293,9 +313,55 @@ impl Manifest {
         self.version = MANIFEST_VERSION;
     }
 
+    /// The project's highlight colour, falling back to the default orange.
+    pub fn accent_rgb(&self) -> [u8; 3] {
+        self.accent.as_deref().and_then(parse_hex).unwrap_or(DEFAULT_ACCENT)
+    }
+
+    pub fn accent_hex(&self) -> String {
+        let [r, g, b] = self.accent_rgb();
+        format!("#{r:02x}{g:02x}{b:02x}")
+    }
+
     pub fn monitor(&self, id: u32) -> Option<&MonitorInfo> {
         self.monitors.iter().find(|m| m.id == id)
     }
+}
+
+pub const DEFAULT_ACCENT: [u8; 3] = [255, 92, 53];
+
+/// Parse `#rgb` or `#rrggbb`.
+pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
+    let h = s.trim().strip_prefix('#')?;
+    let v = u32::from_str_radix(h, 16).ok()?;
+    match h.len() {
+        6 => Some([(v >> 16) as u8, (v >> 8) as u8, v as u8]),
+        3 => Some([((v >> 8) & 0xF) as u8 * 17, ((v >> 4) & 0xF) as u8 * 17, (v & 0xF) as u8 * 17]),
+        _ => None,
+    }
+}
+
+/// Window titles of remote-desktop viewers describe the connection, not
+/// what was clicked, so they make poor step text.
+pub fn is_remote_viewer(process: &str) -> bool {
+    const VIEWERS: [&str; 8] = [
+        "teamviewer", "mstsc", "anydesk", "rustdesk", "vncviewer", "parsec", "darnellcloud", "msrdc",
+    ];
+    let p = process.to_ascii_lowercase();
+    VIEWERS.iter().any(|v| p.contains(v))
+}
+
+/// Tidy a transcript snippet into one sentence: trimmed, capitalised and
+/// ending in punctuation.
+pub fn sentence(s: &str) -> String {
+    let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else { return String::new() };
+    let mut out: String = first.to_uppercase().chain(chars).collect();
+    if !out.ends_with(['.', '!', '?']) {
+        out.push('.');
+    }
+    out
 }
 
 fn is_false(b: &bool) -> bool {
@@ -339,11 +405,38 @@ mod tests {
     #[test]
     fn edited_text_survives_refresh() {
         let mut s = sample().steps.remove(0);
-        assert_eq!(s.text, "Click in **Settings**.");
+        assert_eq!(s.text, "Click here.");
         s.text = "Open the cog menu.".into();
         s.text_edited = true;
         s.refresh_text();
         assert_eq!(s.text, "Open the cog menu.");
+    }
+
+    #[test]
+    fn draft_prefers_ocr_then_narration() {
+        let mut s = sample().steps.remove(0);
+        s.window.as_mut().unwrap().title = "Rovamp - Remote Desktop".into();
+        assert_eq!(s.draft_text(), "Click here.");
+        s.transcript = Some(" now open this pc ".into());
+        assert_eq!(s.draft_text(), "Now open this pc.");
+        s.ocr = Some("This PC".into());
+        assert_eq!(s.draft_text(), "Click **This PC**.");
+        s.window.as_mut().unwrap().process = "notepad.exe".into();
+        s.ocr = None;
+        s.transcript = None;
+        assert_eq!(s.draft_text(), "Click in **Rovamp - Remote Desktop**.");
+    }
+
+    #[test]
+    fn accent_colours() {
+        let mut m = Manifest::new("t");
+        assert_eq!(m.accent_hex(), "#ff5c35");
+        m.accent = Some("#0a84FF".into());
+        assert_eq!(m.accent_rgb(), [10, 132, 255]);
+        m.accent = Some("#f00".into());
+        assert_eq!(m.accent_rgb(), [255, 0, 0]);
+        m.accent = Some("teal".into());
+        assert_eq!(m.accent_rgb(), DEFAULT_ACCENT);
     }
 
     #[test]

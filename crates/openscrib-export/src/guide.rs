@@ -30,6 +30,8 @@ pub struct GuideImage {
 
 pub struct Guide {
     pub title: String,
+    /// `#rrggbb` used for step badges.
+    pub accent: String,
     pub steps: Vec<GuideStep>,
 }
 
@@ -54,7 +56,7 @@ impl Guide {
             .filter(|t| !t.is_empty())
             .unwrap_or(DEFAULT_TITLE)
             .to_string();
-        Ok(Self { title, steps })
+        Ok(Self { title, accent: manifest.accent_hex(), steps })
     }
 
     pub fn image_name(number: usize) -> String {
@@ -102,6 +104,7 @@ impl Guide {
         }
         let title = escape(&self.title);
         let html = HTML_TEMPLATE
+            .replace("{{accent}}", &escape(&self.accent))
             .replace("{{title}}", &title)
             .replace("{{count}}", &format!("{} step{}", self.steps.len(), if self.steps.len() == 1 { "" } else { "s" }))
             .replace("{{steps}}", &body);
@@ -177,7 +180,7 @@ const HTML_TEMPLATE: &str = r#"<!doctype html>
 <meta name="generator" content="OpenSCRIB">
 <title>{{title}}</title>
 <style>
-:root { --bg: #fafaf9; --card: #ffffff; --ink: #1c1c1e; --muted: #6e6e73; --line: #e5e5e3; --accent: #ff5c35; }
+:root { --bg: #fafaf9; --card: #ffffff; --ink: #1c1c1e; --muted: #6e6e73; --line: #e5e5e3; --accent: {{accent}}; }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #141416; --card: #1c1c1f; --ink: #f2f2f2; --muted: #9a9aa0; --line: #2c2c30; }
 }

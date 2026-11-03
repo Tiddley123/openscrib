@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use openh264::OpenH264API;
 use openh264::encoder::{
-    BitRate, Encoder, EncoderConfig, FrameRate, FrameType, RateControlMode, UsageType,
+    BitRate, Encoder, EncoderConfig, FrameRate, FrameType, QpRange, RateControlMode, UsageType,
 };
 use openh264::formats::{RgbaSliceU8, YUVBuffer};
 use openh264::Timestamp;
 use openscrib_core::mkv::{NAL_PPS, NAL_SPS, Track, VideoSpec, annexb_nals, avcc, nal_type, to_length_prefixed};
-use openscrib_core::{Clock, MonitorInfo};
+use openscrib_core::{Clock, MonitorInfo, quality};
 use tracing::{info, warn};
 use xcap::Monitor;
 
@@ -34,6 +34,8 @@ pub struct VideoConfig {
     pub monitor: Option<u32>,
     pub fps: u32,
     pub openh264: PathBuf,
+    /// 1..=100, see `openscrib_core::quality`.
+    pub quality: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -81,7 +83,7 @@ impl ScreenVideo {
         if width == 0 || height == 0 {
             bail!("monitor {} has no usable size", info.id);
         }
-        let encoder = new_encoder(&cfg.openh264, width, height, cfg.fps)?;
+        let encoder = new_encoder(&cfg.openh264, width, height, cfg.fps, cfg.quality)?;
         info!("video: monitor {} \"{}\" {}x{} @ up to {} fps", info.id, info.name, width, height, cfg.fps);
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -122,16 +124,18 @@ fn find_monitor(id: Option<u32>) -> Result<Monitor> {
     })
 }
 
-fn new_encoder(dll: &Path, width: u32, height: u32, fps: u32) -> Result<Encoder> {
+fn new_encoder(dll: &Path, width: u32, height: u32, fps: u32, quality: u8) -> Result<Encoder> {
     let api = OpenH264API::from_blob_path(dll)
         .with_context(|| format!("loading {} (expected Cisco's {OPENH264_DLL})", dll.display()))?;
     // Screen content is mostly static; this budget only matters while
     // things move, and the frame skipping keeps idle time near free.
-    let bps = (width as u64 * height as u64 * fps as u64 / 30).clamp(500_000, 6_000_000) as u32;
+    let bps = quality::bitrate(quality, width, height, fps);
+    let (qp_min, qp_max) = quality::qp_range(quality);
     let config = EncoderConfig::new()
         .usage_type(UsageType::ScreenContentRealTime)
         .rate_control_mode(RateControlMode::Bitrate)
         .bitrate(BitRate::from_bps(bps))
+        .qp(QpRange::new(qp_min, qp_max))
         .max_frame_rate(FrameRate::from_hz(fps as f32))
         // Lets rate control drop frames under pressure; the stream is VFR anyway.
         .skip_frames(true)

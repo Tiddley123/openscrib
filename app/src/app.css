@@ -8,10 +8,11 @@
   --line: #e7e5e2;
   --line-strong: #d6d3cf;
   --accent: #ff5c35;
+  --accent-hover: #eb5531;
   --accent-ink: #ffffff;
-  --accent-soft: #fff0eb;
+  --accent-soft: color-mix(in srgb, var(--accent) 10%, var(--panel));
   --danger: #d93f3f;
-  --focus: 0 0 0 3px rgba(255, 92, 53, 0.25);
+  --focus: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
   --radius: 12px;
   --radius-sm: 8px;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
@@ -24,8 +25,10 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* Dark tokens apply for the system dark theme unless Settings forces light,
+   and always when Settings forces dark. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --bg: #111113;
     --panel: #19191c;
     --panel-2: #1e1e22;
@@ -34,9 +37,26 @@
     --muted: #85858c;
     --line: #2a2a2f;
     --line-strong: #37373d;
-    --accent-soft: #3a1f17;
+    --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--panel));
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.3);
+    color-scheme: dark;
   }
+}
+:root[data-theme='dark'] {
+  --bg: #111113;
+  --panel: #19191c;
+  --panel-2: #1e1e22;
+  --ink: #f2f2f3;
+  --ink-2: #c4c4c9;
+  --muted: #85858c;
+  --line: #2a2a2f;
+  --line-strong: #37373d;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, var(--panel));
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
+}
+:root[data-theme='light'] {
+  color-scheme: light;
 }
 
 * {
@@ -86,8 +106,8 @@ button.primary {
   font-weight: 600;
 }
 button.primary:hover:not(:disabled) {
-  background: #f04e28;
-  border-color: #f04e28;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 button.ghost {
   border-color: transparent;

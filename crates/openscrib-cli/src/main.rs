@@ -49,6 +49,24 @@ enum Cmd {
         /// Also render each PDF page to page-NN.png (for previews).
         #[arg(long)]
         pdf_pages: bool,
+        /// Video quality, 1-100.
+        #[arg(long, default_value_t = openscrib_core::quality::DEFAULT_QUALITY, value_parser = clap::value_parser!(u8).range(1..=100))]
+        quality: u8,
+        /// Scale exported video down to at most this width (0 keeps the original).
+        #[arg(long, default_value_t = 1920)]
+        max_width: u32,
+    },
+    /// List, download or remove the optional AI models.
+    Models {
+        #[command(subcommand)]
+        action: Option<ModelsCmd>,
+    },
+    /// Transcribe narration and read on-screen labels, then redraft step text.
+    Process {
+        project: PathBuf,
+        /// Whisper model id (see `models`). Defaults to small.en, or any installed one.
+        #[arg(long)]
+        whisper: Option<String>,
     },
     /// List monitors and microphones.
     Devices,
@@ -60,6 +78,14 @@ enum Cmd {
         #[arg(long)]
         frame: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum ModelsCmd {
+    /// Download a model by id.
+    Download { id: String },
+    /// Delete a downloaded model.
+    Remove { id: String },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -100,6 +126,9 @@ struct RecordArgs {
     /// Microphone to use: part of its name (see `devices`).
     #[arg(long)]
     mic: Option<String>,
+    /// Video quality, 1-100 (higher is sharper and larger).
+    #[arg(long, default_value_t = openscrib_core::quality::DEFAULT_QUALITY, value_parser = clap::value_parser!(u8).range(1..=100))]
+    quality: u8,
 }
 
 fn main() -> Result<()> {
@@ -113,7 +142,11 @@ fn main() -> Result<()> {
 
     match Cli::parse().cmd {
         Cmd::Record(args) => record(args),
-        Cmd::Export { project, format, out, full_frame, pdf_pages } => export(&project, &format, out, full_frame, pdf_pages),
+        Cmd::Export { project, format, out, full_frame, pdf_pages, quality, max_width } => {
+            export(&project, &format, out, full_frame, pdf_pages, quality, max_width)
+        }
+        Cmd::Models { action } => models(action),
+        Cmd::Process { project, whisper } => process(&project, whisper.as_deref()),
         Cmd::Devices => devices(),
         Cmd::Probe { project, frame } => probe(&*load(&project)?, frame.as_deref()),
         Cmd::Info { project } => print_info(&load(&project)?.read_manifest()?),
@@ -127,14 +160,14 @@ fn main() -> Result<()> {
 }
 
 fn record(args: RecordArgs) -> Result<()> {
-    let RecordArgs { out, no_keys, keep_dir, duration, no_video, no_audio, monitor, fps, mic } = args;
+    let RecordArgs { out, no_keys, keep_dir, duration, no_video, no_audio, monitor, fps, mic, quality } = args;
     if fps == 0 || fps > 60 {
         bail!("--fps must be between 1 and 60");
     }
     let mut media = MediaConfig::default();
     if !no_video {
         match video::locate_openh264() {
-            Some(openh264) => media.video = Some(VideoConfig { monitor, fps, openh264 }),
+            Some(openh264) => media.video = Some(VideoConfig { monitor, fps, openh264, quality }),
             None => tracing::warn!(
                 "{} not found beside the executable or in runtime/; recording without video. \
                  Download it from http://ciscobinary.openh264.org/{}.bz2",
@@ -341,7 +374,15 @@ fn probe(dir: &ProjectDir, frame_out: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-fn export(project: &Path, formats: &[GuideFormat], out: Option<PathBuf>, full_frame: bool, pdf_pages: bool) -> Result<()> {
+fn export(
+    project: &Path,
+    formats: &[GuideFormat],
+    out: Option<PathBuf>,
+    full_frame: bool,
+    pdf_pages: bool,
+    quality: u8,
+    max_width: u32,
+) -> Result<()> {
     use openscrib_export::{CropMode, Guide, RenderOptions};
 
     let resolved = resolve_project(project);
@@ -375,7 +416,9 @@ fn export(project: &Path, formats: &[GuideFormat], out: Option<PathBuf>, full_fr
                     (openscrib_export::video::VideoFormat::Mp4, "guide.mp4")
                 };
                 let p = out.join(name);
-                let opts = openscrib_export::video::VideoExportOptions::new(dll, fmt);
+                let mut opts = openscrib_export::video::VideoExportOptions::new(dll, fmt);
+                opts.quality = quality;
+                opts.max_width = if max_width == 0 { u32::MAX } else { max_width };
                 let started = std::time::Instant::now();
                 let mut shown = 0;
                 let stats = openscrib_export::video::export_video(&dir, &manifest, &opts, &p, |k| {
@@ -424,6 +467,68 @@ fn ensure_guide<'a>(
         *cache = Some(openscrib_export::Guide::build(dir, manifest, opts)?);
     }
     Ok(cache.as_ref().expect("just built"))
+}
+
+fn models(action: Option<ModelsCmd>) -> Result<()> {
+    use openscrib_process::models::{self, CATALOG};
+
+    match action {
+        None => {
+            println!("Models folder: {}", models::models_dir().display());
+            for m in CATALOG {
+                let state = if models::installed(m) { "installed" } else { "-" };
+                println!("  {:<16} {:>6} MB  {:<10} {} ({})", m.id, m.size_mb, state, m.label, m.note);
+            }
+        }
+        Some(ModelsCmd::Download { id }) => {
+            let m = models::find(&id).with_context(|| format!("unknown model {id}; run `openscrib models`"))?;
+            let mut shown = 0;
+            let path = models::download(m, |done, total| {
+                let pct = total.map_or(0, |t| done * 100 / t.max(1));
+                if pct >= shown + 5 {
+                    shown = pct;
+                    eprint!("\r  {id}: {pct}% of {} MB   ", m.size_mb);
+                }
+            })?;
+            eprintln!();
+            info!("installed {}", path.display());
+        }
+        Some(ModelsCmd::Remove { id }) => {
+            let m = models::find(&id).with_context(|| format!("unknown model {id}"))?;
+            models::remove(m)?;
+            info!("removed {id}");
+        }
+    }
+    Ok(())
+}
+
+/// Process a packed project in place: unpack, run, write the manifest, repack.
+fn process(project: &Path, whisper: Option<&str>) -> Result<()> {
+    use openscrib_process::{ProcessOptions, process};
+
+    let resolved = resolve_project(project);
+    let dir = load(&resolved)?;
+    let mut manifest = dir.read_manifest()?;
+    let opts = ProcessOptions::installed(whisper);
+    let started = std::time::Instant::now();
+    let report = process(&dir, &mut manifest, &opts, |p| info!("[{}] {}", p.stage, p.message))?;
+    dir.write_manifest(&manifest)?;
+    if resolved.is_file() {
+        dir.pack(&resolved)?;
+    }
+    info!(
+        "{} narration segments over {} steps, {} labels, {} tooltips, {} steps redrafted in {:.1}s",
+        report.segments,
+        report.steps_with_narration,
+        report.labels,
+        report.tooltips,
+        report.redrafted,
+        started.elapsed().as_secs_f64()
+    );
+    for s in &report.skipped {
+        tracing::warn!("skipped: {s}");
+    }
+    print_info(&manifest)
 }
 
 fn devices() -> Result<()> {
