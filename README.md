@@ -48,6 +48,9 @@ cargo run -p openscrib-cli -- record --out demo.scrib
 ```
 
 Click around, type something, then press **Ctrl+Shift+F12** to stop.
+Without `--out`, recordings go to `projects/` beside the executable
+(`target/release/projects/` under `cargo run --release`). `info`, `probe` and
+`markers` also look there, so the bare file name that `record` prints works.
 
 ```bash
 cargo run -p openscrib-cli -- info demo.scrib

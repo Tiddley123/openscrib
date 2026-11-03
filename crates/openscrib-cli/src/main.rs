@@ -176,8 +176,31 @@ fn default_project_path() -> Result<PathBuf> {
     Ok(base.join("projects").join(format!("recording-{stamp}.{PROJECT_EXT}")))
 }
 
+/// A relative path that doesn't exist here is also tried inside the default
+/// `projects/` folder beside the executable, so `info recording-….scrib`
+/// works with the name `record` printed.
+fn resolve_project(path: &Path) -> PathBuf {
+    if path.exists() || path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let projects = default_project_path()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+    if let Some(dir) = projects {
+        let file_name = path.file_name().map(PathBuf::from).unwrap_or_default();
+        for candidate in [dir.join(path), dir.join(file_name)] {
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
 /// Open a project from a directory, or unpack a .scrib into a temp dir.
 fn load(path: &Path) -> Result<ProjectDir> {
+    let resolved = resolve_project(path);
+    let path = resolved.as_path();
     if path.is_dir() {
         return Ok(ProjectDir::open(path)?);
     }

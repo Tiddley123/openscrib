@@ -26,6 +26,8 @@ struct Inner {
     interleaver: Interleaver,
     pending: Vec<(Track, u64, bool, Vec<u8>)>,
     failed: bool,
+    /// Packets stamped after this are dropped; set when the user stops.
+    end_ms: u64,
 }
 
 #[derive(Clone)]
@@ -43,6 +45,7 @@ impl Muxer {
             interleaver: Interleaver::new(INTERLEAVE_WINDOW_MS),
             pending: Vec::new(),
             failed: false,
+            end_ms: u64::MAX,
         };
         if !expect_video {
             inner.open(None)?;
@@ -60,12 +63,19 @@ impl Muxer {
         self.0.lock().expect("muxer lock").open(None)
     }
 
+    /// Mark the end of the recording. Streams take a moment to shut down, and
+    /// anything they capture after the user pressed stop must not reach the
+    /// file.
+    pub fn close_at(&self, end_ms: u64) {
+        self.0.lock().expect("muxer lock").end_ms = end_ms;
+    }
+
     /// Queue a packet. Write errors are logged once and further packets
     /// dropped, so a full disk never takes the input hooks down with it.
     pub fn push(&self, track: Track, t_ms: u64, keyframe: bool, data: Vec<u8>) {
         let mut g = self.0.lock().expect("muxer lock");
         let inner = &mut *g;
-        if inner.failed {
+        if inner.failed || t_ms > inner.end_ms {
             return;
         }
         let Some(w) = inner.writer.as_mut() else {

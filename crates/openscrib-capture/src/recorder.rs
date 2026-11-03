@@ -180,6 +180,17 @@ pub fn record(
     }
 
     let end_ms = clock.now_ms();
+    // Cut both streams at the moment the user stopped, then let them wind
+    // down in parallel while the step data is flushed.
+    if let Some(mux) = &muxer {
+        mux.close_at(end_ms);
+    }
+    if let Some(v) = &video {
+        v.request_stop();
+    }
+    if let Some(n) = &narration {
+        n.request_stop();
+    }
     let mut manifest = session.finish(end_ms)?;
     writer.finish();
 

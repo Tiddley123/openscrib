@@ -80,8 +80,13 @@ impl Narration {
         }
     }
 
-    pub fn stop(self) -> Result<AudioStats> {
+    /// Ask the stream to stop without waiting; call [`Narration::stop`] to join.
+    pub fn request_stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn stop(self) -> Result<AudioStats> {
+        self.request_stop();
         self.handle.join().map_err(|_| anyhow!("audio thread panicked"))?
     }
 }
@@ -176,7 +181,12 @@ fn run(
             }
         }
     }
+    let closing = std::time::Instant::now();
     drop(stream);
+    let took = closing.elapsed();
+    if took > Duration::from_millis(500) {
+        warn!("microphone took {} ms to close", took.as_millis());
+    }
     while let Ok(chunk) = rx.try_recv() {
         handle_chunk(chunk, &mut pcm)?;
     }

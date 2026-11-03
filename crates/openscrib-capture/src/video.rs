@@ -99,8 +99,13 @@ impl ScreenVideo {
         Ok(Self { stop, handle })
     }
 
-    pub fn stop(self) -> Result<VideoStats> {
+    /// Ask the capture loop to stop without waiting; call [`ScreenVideo::stop`] to join.
+    pub fn request_stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    pub fn stop(self) -> Result<VideoStats> {
+        self.request_stop();
         self.handle.join().map_err(|_| anyhow!("video thread panicked"))?
     }
 }
