@@ -60,6 +60,54 @@ pub struct VideoExportStats {
     pub segments: usize,
     pub width: u32,
     pub height: u32,
+    /// Captions written beside the video (`.srt` and `.vtt`).
+    pub captions: usize,
+}
+
+/// Narration remapped onto the output timeline of `segs` (the stitched
+/// clips), as `(start_ms, end_ms, text)`.
+pub fn captions(manifest: &Manifest, segs: &[(u64, u64)]) -> Vec<(u64, u64, String)> {
+    let mut out = Vec::new();
+    let mut base = 0;
+    for &(a, b) in segs {
+        for n in &manifest.narration {
+            let (s, e) = (n.start_ms.max(a), n.end_ms.min(b));
+            if e > s + 200 {
+                out.push((base + s - a, base + e - a, n.text.trim().to_string()));
+            }
+        }
+        base += b - a;
+    }
+    out
+}
+
+fn caption_time(ms: u64, sep: char) -> String {
+    format!("{:02}:{:02}:{:02}{sep}{:03}", ms / 3_600_000, ms / 60_000 % 60, ms / 1000 % 60, ms % 1000)
+}
+
+/// Write `<stem>.srt` and `<stem>.vtt` next to `video`; returns how many.
+pub fn write_captions(video: &Path, caps: &[(u64, u64, String)]) -> Result<usize> {
+    if caps.is_empty() {
+        return Ok(0);
+    }
+    let mut srt = String::new();
+    let mut vtt = String::from("WEBVTT
+
+");
+    for (i, (s, e, text)) in caps.iter().enumerate() {
+        srt.push_str(&format!("{}
+{} --> {}
+{text}
+
+", i + 1, caption_time(*s, ','), caption_time(*e, ',')));
+        vtt.push_str(&format!("{} --> {}
+{text}
+
+", caption_time(*s, '.'), caption_time(*e, '.')));
+    }
+    fs::write(video.with_extension("srt"), srt)?;
+    fs::write(video.with_extension("vtt"), vtt)?;
+    Ok(caps.len())
 }
 
 /// The source ranges to stitch, in output order: each step's clip in step
@@ -349,7 +397,8 @@ pub fn export_video(
         let _ = fs::remove_file(&tmp_mp4);
     }
     progress(1.0);
-    Ok(VideoExportStats { duration_ms: total_ms, frames, segments: segs.len(), width: out_w, height: out_h })
+    let captions = write_captions(out, &captions(manifest, &segs))?;
+    Ok(VideoExportStats { duration_ms: total_ms, frames, segments: segs.len(), width: out_w, height: out_h, captions })
 }
 
 /// Copy `screen.mkv` into an MP4 without re-encoding, for players (such as
@@ -518,6 +567,19 @@ mod tests {
         // Reordered in the editor: b before a.
         m.steps = vec![b, c, a];
         assert_eq!(segments(&m), [(29_000, 60_000), (9_000, 12_000)]);
+    }
+
+    #[test]
+    fn captions_follow_the_stitched_timeline() {
+        let mut m = Manifest::new("t");
+        m.narration = vec![
+            openscrib_core::NarrationSegment { start_ms: 1_000, end_ms: 3_000, text: "intro".into(), step: None },
+            openscrib_core::NarrationSegment { start_ms: 10_500, end_ms: 12_000, text: "second clip".into(), step: None },
+            openscrib_core::NarrationSegment { start_ms: 20_000, end_ms: 21_000, text: "cut".into(), step: None },
+        ];
+        let caps = captions(&m, &[(10_000, 13_000), (0, 4_000)]);
+        assert_eq!(caps, [(500, 2_000, "second clip".into()), (4_000, 6_000, "intro".into())]);
+        assert_eq!(caption_time(3_723_456, ','), "01:02:03,456");
     }
 
     #[test]

@@ -9,7 +9,10 @@
   let errors = $state<Record<string, string>>({})
 
   let whisper = $derived(models.filter((m) => m.kind === 'whisper'))
-  let ocr = $derived(models.filter((m) => m.kind !== 'whisper'))
+  let ocr = $derived(models.filter((m) => m.kind === 'ocr_detection' || m.kind === 'ocr_recognition'))
+  let vision = $derived(models.filter((m) => m.kind === 'vision_model' || m.kind === 'vision_projector'))
+  let visionReady = $derived(vision.length > 0 && vision.every((m) => m.installed))
+  let visionSize = $derived(vision.reduce((n, m) => n + m.size_mb, 0))
   let ocrReady = $derived(ocr.length > 0 && ocr.every((m) => m.installed))
   let ocrSize = $derived(ocr.reduce((n, m) => n + m.size_mb, 0))
 
@@ -110,6 +113,28 @@
         <button class="small" onclick={() => download(ocr.filter((m) => !m.installed).map((m) => m.id))}>Download</button>
       {/if}
       {#each ocr as m}
+        {#if errors[m.id]}<span class="error">{errors[m.id]}</span>{/if}
+      {/each}
+    </li>
+  </ul>
+</section>
+
+<section>
+  <div class="label">Vision &amp; writing (Qwen2.5-VL 3B)</div>
+  <p class="hint">Names icons with no text (like the Start button), picks the right label when OCR reads the wrong line, works your narration into the step text, and titles the guide. Runs on this PC, about 20–40 s per recording on CPU.</p>
+  <ul>
+    <li class:active={visionReady}>
+      <span class="name">{visionReady ? 'Installed' : 'Not installed'}</span>
+      <span class="note">Model and image encoder · {size(visionSize)}</span>
+      {#if vision.some((m) => progress[m.id] !== undefined)}
+        {@const p = vision.map((m) => progress[m.id] ?? (m.installed ? 1 : 0))}
+        <span class="pct">{Math.round(((p[0] + p[1]) / 2) * 100)}%</span>
+      {:else if visionReady}
+        <button class="ghost small" onclick={() => vision.forEach((m) => remove(m.id))}>Remove</button>
+      {:else}
+        <button class="small" onclick={() => download(vision.filter((m) => !m.installed).map((m) => m.id))}>Download</button>
+      {/if}
+      {#each vision as m}
         {#if errors[m.id]}<span class="error">{errors[m.id]}</span>{/if}
       {/each}
     </li>

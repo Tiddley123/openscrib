@@ -78,9 +78,11 @@ pub fn render_step(dir: &ProjectDir, manifest: &Manifest, step: &Step, opts: &Re
                 let (x, y) = map(*at);
                 draw_marker(&mut out, Point::new(x.round() as i32, y.round() as i32), scaled(MarkerStyle { color: accent, ..MarkerStyle::default() }, ui));
             }
+            // Drawn after the click marker, below.
+            Annotation::Sticker { .. } => {}
         }
     }
-    if let (StepKind::Click, Some(c)) = (step.kind, &step.click) {
+    if let (StepKind::Click, Some(c), false) = (step.kind, &step.click, step.hide_marker) {
         let (x, y) = map(c.in_frame);
         let at = Point::new(x.round() as i32, y.round() as i32);
         let mut style = scaled(MarkerStyle::for_click(c, 1.0), ui);
@@ -90,6 +92,12 @@ pub fn render_step(dir: &ProjectDir, manifest: &Manifest, step: &Step, opts: &Re
         draw_marker(&mut out, at, style);
         if c.double {
             draw_marker(&mut out, at, MarkerStyle { radius: style.radius + style.ring * 2.5, ..style });
+        }
+    }
+    for a in &step.annotations {
+        if let Annotation::Sticker { at, icon, size } = a {
+            let d = (*size as f32 * s).max(28.0);
+            crate::icons::draw_sticker(&mut out, map(*at), d, *icon, accent);
         }
     }
     Ok(Some(out))
@@ -112,11 +120,16 @@ pub fn default_crop(manifest: &Manifest, step: &Step, mode: CropMode, (fw, fh): 
         .and_then(|id| manifest.monitor(id))
         .map_or(Point::new(0, 0), |m| m.rect.origin());
     let Some(win) = &step.window else { return full };
-    let r = win.client.unwrap_or(win.rect);
+    // The whole window, title bar included, reads as "that window". Remote
+    // viewers are the exception: their client area is the remote screen.
+    let r = if openscrib_core::is_remote_viewer(&win.process) { win.client.unwrap_or(win.rect) } else { win.rect };
     let mut crop = Rect { x: r.x - origin.x, y: r.y - origin.y, w: r.w, h: r.h };
 
-    // Keep the click in view even if the window lookup was off.
-    if let Some(c) = &step.click {
+    // Only grow past the window when the click itself landed outside it
+    // (e.g. on a resize border).
+    if let Some(c) = &step.click
+        && !crop.contains(c.in_frame)
+    {
         crop = union_point(crop, c.in_frame, 40);
     }
     let crop = pad_to_min(clamp_rect(crop, (fw, fh)), (fw, fh));
@@ -253,7 +266,7 @@ mod tests {
             rect: Rect { x: -1800, y: 100, w: 1000, h: 700 },
             client: Some(Rect { x: -1790, y: 140, w: 980, h: 650 }),
             title: "w".into(),
-            process: "p".into(),
+            process: "TeamViewer.exe".into(),
         });
         s.click = Some(Click {
             x: -1500,
@@ -272,6 +285,14 @@ mod tests {
         let c = default_crop(&m, &s, CropMode::Window, (1920, 1080));
         assert_eq!(c, Rect { x: 130, y: 140, w: 980, h: 650 });
         assert_eq!(default_crop(&m, &s, CropMode::Full, (1920, 1080)), Rect { x: 0, y: 0, w: 1920, h: 1080 });
+    }
+
+    #[test]
+    fn normal_apps_crop_to_the_whole_window() {
+        let (m, mut s) = manifest_and_step();
+        s.window.as_mut().unwrap().process = "notepad.exe".into();
+        let c = default_crop(&m, &s, CropMode::Window, (1920, 1080));
+        assert_eq!(c, Rect { x: 120, y: 100, w: 1000, h: 700 });
     }
 
     #[test]

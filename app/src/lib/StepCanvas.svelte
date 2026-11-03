@@ -1,26 +1,55 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { fileUrl, type Annotation, type Point, type Rect, type Step } from './api'
+  import { fileUrl, type Annotation, type Point, type Rect, type Step, type StickerIcon } from './api'
+  import { STICKERS, stickerColor } from './stickers'
 
-  type Tool = 'select' | 'marker' | 'arrow' | 'box' | 'blur' | 'crop'
+  type Tool = 'select' | 'marker' | 'arrow' | 'box' | 'blur' | 'sticker' | 'crop'
 
-  let { step = $bindable(), workDir, size, defaultCrop, highlight }: {
+  let { step = $bindable(), workDir, size, defaultCrop, highlight, snapRects = [] }: {
     step: Step
     workDir: string
     size: [number, number] | null
     defaultCrop: Rect | null
     /** Project highlight colour for markers and shapes. */
     highlight: string
+    /** Window edges (frame pixels) that crops snap to. */
+    snapRects?: Rect[]
   } = $props()
 
   const tools: { id: Tool; label: string; key: string; hint: string }[] = [
-    { id: 'select', label: 'Select', key: 'V', hint: 'Click a note to select it, then Delete. Right-click any note to delete it.' },
+    { id: 'select', label: 'Select', key: 'V', hint: 'Drag the click marker or a sticker to move it. Click a note to select it, then Delete; right-click deletes.' },
     { id: 'arrow', label: 'Arrow', key: 'A', hint: 'Drag from tail to tip' },
     { id: 'box', label: 'Box', key: 'B', hint: 'Drag to outline an area' },
     { id: 'marker', label: 'Marker', key: 'M', hint: 'Click to add a ring' },
     { id: 'blur', label: 'Redact', key: 'R', hint: 'Drag over anything private; exports paint it out solid' },
-    { id: 'crop', label: 'Crop', key: 'C', hint: 'Drag the region exports should show' },
+    { id: 'sticker', label: 'Sticker', key: 'S', hint: 'Pick a pictograph, then click to stick it on' },
+    { id: 'crop', label: 'Crop', key: 'C', hint: 'Drag the region exports should show; edges snap to the window' },
   ]
+
+  let stickerIcon = $state<StickerIcon>('warning')
+  /** What a select-tool drag is moving. */
+  let dragging = $state<{ kind: 'click' } | { kind: 'ann'; index: number } | null>(null)
+
+  /** Pull x/y edges onto nearby window edges. */
+  function snapRect(r: Rect): Rect {
+    const tol = 14 * k
+    const xs = snapRects.flatMap((s) => [s.x, s.x + s.w])
+    const ys = snapRects.flatMap((s) => [s.y, s.y + s.h])
+    const near = (v: number, cands: number[]) => cands.find((c) => Math.abs(c - v) <= tol) ?? v
+    const x0 = near(r.x, xs)
+    const y0 = near(r.y, ys)
+    const x1 = near(r.x + r.w, xs)
+    const y1 = near(r.y + r.h, ys)
+    return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) }
+  }
+
+  function startDrag(e: PointerEvent, what: { kind: 'click' } | { kind: 'ann'; index: number }) {
+    if (tool !== 'select') return
+    e.stopPropagation()
+    ;(e.currentTarget as Element).closest('svg')?.setPointerCapture(e.pointerId)
+    dragging = what
+    if (what.kind === 'ann') selected = what.index
+  }
 
   let tool = $state<Tool>('select')
   // The backend knows the frame size; fall back to the image's own.
@@ -101,15 +130,33 @@
       step.annotations.push({ type: 'marker', at: p })
       return
     }
+    if (tool === 'sticker') {
+      const size = Math.round(Math.min(160, Math.max(56, Math.min(W, H) * 0.07)))
+      step.annotations.push({ type: 'sticker', at: p, icon: stickerIcon, size })
+      return
+    }
     ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
     draft = { from: p, to: p }
   }
 
   function move(e: PointerEvent) {
+    if (dragging) {
+      const p = toFrame(e)
+      if (dragging.kind === 'click' && step.click) step.click.in_frame = p
+      else if (dragging.kind === 'ann') {
+        const a = step.annotations[dragging.index]
+        if (a && (a.type === 'sticker' || a.type === 'marker')) a.at = p
+      }
+      return
+    }
     if (draft) draft.to = toFrame(e)
   }
 
   function up() {
+    if (dragging) {
+      dragging = null
+      return
+    }
     if (!draft) return
     const { from, to } = draft
     draft = null
@@ -118,7 +165,7 @@
     if (tool === 'arrow') step.annotations.push({ type: 'arrow', from, to })
     else if (tool === 'box') step.annotations.push({ type: 'box', rect: rectOf(from, to) })
     else if (tool === 'blur') step.annotations.push({ type: 'blur', rect: rectOf(from, to) })
-    else if (tool === 'crop') step.crop = rectOf(from, to)
+    else if (tool === 'crop') step.crop = snapRect(rectOf(from, to))
   }
 
   function removeNote(i: number) {
@@ -161,8 +208,13 @@
   </div>
   <div class="right">
     {#if step.pre_frame}
-      <label class="pre" title="The frame captured when the mouse rested before the click, which often shows the tooltip">
+      <label class="pre" title="The frame captured while the mouse rested before the click; it differs when a tooltip or hover state was showing">
         <input type="checkbox" bind:checked={showPre} /> Before click
+      </label>
+    {/if}
+    {#if step.click}
+      <label class="pre" title="Hide the automatic click ring in this step and its exports">
+        <input type="checkbox" bind:checked={step.hide_marker} /> Hide marker
       </label>
     {/if}
     {#if selected !== null}
@@ -173,6 +225,23 @@
     {/if}
   </div>
 </div>
+{#if tool === 'sticker'}
+  <div class="stickers" role="radiogroup" aria-label="Sticker">
+    {#each STICKERS as s}
+      <button
+        class="sticker"
+        class:on={stickerIcon === s.id}
+        role="radio"
+        aria-checked={stickerIcon === s.id}
+        title={s.label}
+        onclick={() => (stickerIcon = s.id)}
+      >
+        <span class="badge" class:tri={s.id === 'warning'} style:background={stickerColor(s.id, highlight)}>{s.glyph}</span>
+        {s.label}
+      </button>
+    {/each}
+  </div>
+{/if}
 <p class="hint">{tools.find((t) => t.id === tool)?.hint}</p>
 
 <div class="canvas" bind:this={container}>
@@ -245,20 +314,49 @@
             {:else if a.type === 'marker'}
               <circle cx={a.at.x} cy={a.at.y} r={30} fill="none" stroke="#fff" stroke-width={7} opacity="0.9" />
               <circle cx={a.at.x} cy={a.at.y} r={30} fill="none" stroke={highlight} stroke-width={4} />
+              <circle cx={a.at.x} cy={a.at.y} r={30} fill="transparent" class="handle" role="presentation" onpointerdown={(e) => startDrag(e, { kind: 'ann', index: i })} />
+            {:else if a.type === 'sticker'}
+              {@const r = a.size / 2}
+              {@const col = stickerColor(a.icon, highlight)}
+              <g class="handle" role="presentation" onpointerdown={(e) => startDrag(e, { kind: 'ann', index: i })}>
+                {#if a.icon === 'warning'}
+                  <path
+                    d="M{a.at.x} {a.at.y - r * 1.05}L{a.at.x + r * 1.1} {a.at.y + r * 0.85}H{a.at.x - r * 1.1}Z"
+                    fill={col}
+                    stroke="#fff"
+                    stroke-width={r * 0.12}
+                    stroke-linejoin="round"
+                  />
+                {:else}
+                  <circle cx={a.at.x} cy={a.at.y} r={r} fill={col} stroke="#fff" stroke-width={r * 0.1} />
+                {/if}
+                <text
+                  x={a.at.x}
+                  y={a.at.y + (a.icon === 'warning' ? r * 0.12 : 0)}
+                  text-anchor="middle"
+                  dominant-baseline="central"
+                  fill="#fff"
+                  font-weight="800"
+                  font-size={r * (a.icon === 'quote' ? 1.6 : 1.1)}
+                  font-family="Segoe UI, system-ui, sans-serif"
+                >{STICKERS.find((s) => s.id === a.icon)?.glyph}</text>
+              </g>
             {/if}
           </g>
         {/each}
 
-        {#if step.click}
+        {#if step.click && !step.hide_marker}
           <circle cx={step.click.in_frame.x} cy={step.click.in_frame.y} r={30} fill="none" stroke="#fff" stroke-width={7} opacity="0.9" pointer-events="none" />
           <circle
             cx={step.click.in_frame.x}
             cy={step.click.in_frame.y}
             r={30}
-            fill="none"
+            fill="transparent"
             stroke={step.click.button === 'right' ? '#3584ff' : highlight}
             stroke-width={4}
-            pointer-events="none"
+            class="handle"
+            role="presentation"
+            onpointerdown={(e) => startDrag(e, { kind: 'click' })}
           />
         {/if}
 
@@ -289,6 +387,7 @@
 <style>
   .toolbar {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
     padding: 12px 16px 0;
@@ -296,6 +395,7 @@
   }
   .tools {
     display: inline-flex;
+    flex-wrap: wrap;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 10px;
@@ -327,6 +427,40 @@
   }
   .pre input {
     accent-color: var(--accent);
+  }
+  .stickers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px 16px 0;
+  }
+  .sticker {
+    padding: 3px 10px 3px 4px;
+    border-radius: 99px;
+    font-size: 12.5px;
+    gap: 6px;
+  }
+  .sticker.on {
+    border-color: var(--ink);
+    background: var(--panel-2);
+  }
+  .badge {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font-weight: 800;
+    font-size: 13px;
+  }
+  .badge.tri {
+    border-radius: 3px;
+    clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    padding-top: 5px;
+  }
+  .tool-select .handle {
+    cursor: move;
   }
   .hint {
     margin: 6px 16px 0;

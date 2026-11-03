@@ -14,6 +14,7 @@ tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 anyhow = "1.0.104"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
 openscrib-capture = { path = "../../crates/openscrib-capture" }
 openscrib-core = { path = "../../crates/openscrib-core" }
 openscrib-export = { path = "../../crates/openscrib-export" }

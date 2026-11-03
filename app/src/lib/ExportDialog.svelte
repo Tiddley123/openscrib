@@ -34,7 +34,7 @@
   let clipCount = $derived(manifest.steps.filter((s) => s.clip).length)
 
   onMount(() => {
-    api.defaultExportDir().then((d) => (outDir = d))
+    api.defaultExportDir(manifest.title ?? null).then((d) => (outDir = d))
     const un = [
       listen<{ format: string; progress: number }>('export-progress', (e) => {
         progress[e.payload.format] = e.payload.progress

@@ -109,6 +109,9 @@ pub struct Session<C: Capture, S: FrameSink> {
     burst: Option<Burst>,
     next_id: u32,
     blank_warned: bool,
+    /// Area around the pointer in the last click frame, to tell whether the
+    /// pre-click frame adds anything (a tooltip, a hover state).
+    last_click_region: Option<RgbaImage>,
     stopped: bool,
 }
 
@@ -140,6 +143,7 @@ impl<C: Capture, S: FrameSink> Session<C, S> {
             burst: None,
             next_id: 1,
             blank_warned: false,
+            last_click_region: None,
             stopped: false,
         })
     }
@@ -241,6 +245,10 @@ impl<C: Capture, S: FrameSink> Session<C, S> {
             && p.at == at
             && Some(p.monitor) == step.monitor
             && t.saturating_sub(p.t_ms) <= PRE_FRAME_MAX_AGE_MS
+            && self
+                .last_click_region
+                .as_ref()
+                .is_none_or(|now| differs(&pointer_region(&p.image, p.at.offset_from(origin.unwrap_or(Point::new(0, 0)))), now))
         {
             let rel = ProjectDir::frame_name(id, "_pre");
             self.sink.save(rel.clone(), p.image);
@@ -358,6 +366,7 @@ impl<C: Capture, S: FrameSink> Session<C, S> {
     fn attach_frame(&mut self, step: &mut Step, at: Point) -> Option<Point> {
         match self.cap.grab(at) {
             Ok((mon, img)) => {
+                self.last_click_region = Some(pointer_region(&img, at.offset_from(mon.rect.origin())));
                 if !self.blank_warned && looks_blank(&img) {
                     self.blank_warned = true;
                     let msg = format!(
@@ -453,6 +462,28 @@ impl<C: Capture, S: FrameSink> Session<C, S> {
     }
 }
 
+/// The area around the pointer (frame coordinates) where tooltips and hover
+/// states show up.
+fn pointer_region(img: &RgbaImage, at: Point) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let x = (at.x - 200).clamp(0, w.saturating_sub(1) as i32) as u32;
+    let y = (at.y - 80).clamp(0, h.saturating_sub(1) as i32) as u32;
+    image::imageops::crop_imm(img, x, y, 600.min(w - x), 260.min(h - y)).to_image()
+}
+
+/// True when two regions differ in more than a sliver of pixels.
+fn differs(a: &RgbaImage, b: &RgbaImage) -> bool {
+    if a.dimensions() != b.dimensions() {
+        return true;
+    }
+    let changed = a
+        .pixels()
+        .zip(b.pixels())
+        .filter(|(p, q)| (0..3).map(|i| p[i].abs_diff(q[i]) as u32).sum::<u32>() > 40)
+        .count();
+    changed * 1000 > (a.width() * a.height()) as usize * 3
+}
+
 fn centre(w: &WindowInfo) -> Point {
     Point::new(w.rect.x + (w.rect.w / 2) as i32, w.rect.y + (w.rect.h / 2) as i32)
 }
@@ -499,9 +530,20 @@ mod tests {
 
     struct FakeCapture;
 
+    thread_local! {
+        /// Whether successive grabs look different (a tooltip came and went).
+        static SCREEN_CHANGES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+        static GRABS: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    }
+
     impl Capture for FakeCapture {
         fn grab(&mut self, _at: Point) -> Result<(MonitorInfo, RgbaImage)> {
-            let mut img = RgbaImage::from_pixel(8, 8, Rgba([20, 20, 20, 255]));
+            let n = GRABS.with(|g| {
+                g.set(g.get().wrapping_add(1));
+                g.get()
+            });
+            let shade = if SCREEN_CHANGES.with(|c| c.get()) { 20 + (n % 2) * 200 } else { 20 };
+            let mut img = RgbaImage::from_pixel(8, 8, Rgba([shade, shade, shade, 255]));
             img.put_pixel(4, 4, Rgba([250, 250, 250, 255]));
             let mon = MonitorInfo { id: 7, name: "Left".into(), rect: MON, scale: 1.0, primary: false };
             Ok((mon, img))
@@ -579,6 +621,18 @@ mod tests {
         assert_eq!(s.text, "Click here."); // remote viewer titles are not step text
         assert_eq!(saved, ["frames/0001.png", "frames/0001_pre.png"]);
         assert_eq!(m.monitors.len(), 1);
+    }
+
+    #[test]
+    fn no_pre_frame_when_nothing_changed_on_screen() {
+        SCREEN_CHANGES.with(|c| c.set(false));
+        let (m, saved) = run(vec![
+            ev(100, Input::Move(Point::new(-1000, 500))),
+            ev(1000, Input::Press(MouseButton::Left)),
+        ]);
+        SCREEN_CHANGES.with(|c| c.set(true));
+        assert_eq!(m.steps[0].pre_frame, None);
+        assert_eq!(saved, ["frames/0001.png"]);
     }
 
     #[test]

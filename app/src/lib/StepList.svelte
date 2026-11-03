@@ -1,13 +1,15 @@
 <script lang="ts">
   import { fileUrl, formatTime, type Step } from './api'
 
-  let { steps, workDir, selectedId, onselect, onreorder, ondelete }: {
+  let { steps, workDir, selectedId, onselect, onreorder, ondelete, onadd }: {
     steps: Step[]
     workDir: string
     selectedId: number | null
     onselect: (id: number) => void
     onreorder: (from: number, to: number) => void
     ondelete: (id: number) => void
+    /** Add a step after the selected one, optionally from an image file. */
+    onadd: (withImage: boolean) => void
   } = $props()
 
   let dragFrom = $state<number | null>(null)
@@ -28,8 +30,11 @@
 
 <aside>
   <div class="head">
-    <span class="label">Steps</span>
-    <span class="count">{steps.length}</span>
+    <span class="label">Steps <span class="count">{steps.length}</span></span>
+    <span class="add">
+      <button class="ghost small" onclick={() => onadd(false)} title="Add a text step after the selected step (for narration, notes or warnings)">+ Step</button>
+      <button class="ghost small" onclick={() => onadd(true)} title="Add a step with an image from your computer">+ Image</button>
+    </span>
   </div>
   <ol>
     {#each steps as s, i (s.id)}
@@ -98,6 +103,17 @@
     display: flex;
     justify-content: space-between;
     padding: 14px 16px 8px;
+  }
+  .head {
+    align-items: center;
+  }
+  .add {
+    display: flex;
+    gap: 2px;
+  }
+  .small {
+    padding: 3px 8px;
+    font-size: 12px;
   }
   .count {
     color: var(--muted);

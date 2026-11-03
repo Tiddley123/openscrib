@@ -462,10 +462,47 @@ fn draft_text(step: openscrib_core::Step) -> String {
 }
 
 #[tauri::command]
-fn default_export_dir(state: State<AppState>) -> CmdResult<String> {
+fn default_export_dir(state: State<AppState>, title: Option<String>) -> CmdResult<String> {
     with_project(&state, |p| {
-        let stem = p.source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "guide".into());
-        Ok(p.source.with_file_name(format!("{stem}-export")).to_string_lossy().into_owned())
+        // Name the folder after the guide; fall back to the recording's name.
+        let name = title
+            .as_deref()
+            .map(folder_name)
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| {
+                let stem = p.source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "guide".into());
+                format!("{stem}-export")
+            });
+        Ok(p.source.with_file_name(name).to_string_lossy().into_owned())
+    })
+}
+
+/// A guide title made safe as a Windows folder name.
+fn folder_name(title: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .map(|c| if r#"<>:"/\|?*"#.contains(c) || c.is_control() { '-' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']);
+    cleaned.chars().take(80).collect::<String>().trim().to_string()
+}
+
+#[derive(Serialize)]
+struct ImportedImage {
+    rel: String,
+    width: u32,
+    height: u32,
+}
+
+/// Copy an image file into the open project (as PNG) for a step added in the
+/// editor.
+#[tauri::command]
+fn import_image(state: State<AppState>, path: String, step_id: u32) -> CmdResult<ImportedImage> {
+    with_project(&state, |p| {
+        let img = image::open(&path).map_err(err)?.to_rgba8();
+        let rel = ProjectDir::frame_name(step_id, "_import");
+        img.save(p.dir.path(&rel)).map_err(err)?;
+        Ok(ImportedImage { rel, width: img.width(), height: img.height() })
     })
 }
 
@@ -494,6 +531,7 @@ pub fn run() {
             remove_model,
             process_project,
             draft_text,
+            import_image,
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpenSCRIB")

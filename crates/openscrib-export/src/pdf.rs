@@ -18,6 +18,8 @@ use typst::{Library, LibraryExt, World};
 use typst_kit::fonts::{self, FontStore};
 
 use crate::guide::{Guide, inline_typst, typst_str};
+use crate::icons::callout_style;
+use openscrib_core::Callout;
 
 /// Content width of an A4 page with our margins, in mm.
 const CONTENT_W_MM: f32 = 174.0;
@@ -109,17 +111,40 @@ impl Guide {
                     typst_str(&Self::image_name(s.number))
                 )
             });
-            src.push_str(&format!(
-                r##"#block(breakable: false, below: 20pt)[
-  #grid(columns: (20pt, 1fr), column-gutter: 9pt,
-    box(width: 20pt, height: 20pt, radius: 10pt, fill: rgb({accent}),
-      align(center + horizon, text(fill: white, weight: "bold", size: 9.5pt)[{n}])),
-    pad(top: 2.5pt)[{text}])
-  {image}]
-"##,
+            let badge = format!(
+                r##"box(width: 20pt, height: 20pt, radius: 10pt, fill: rgb({accent}),
+      align(center + horizon, text(fill: white, weight: "bold", size: 9.5pt)[{n}]))"##,
                 n = s.number,
                 accent = typst_str(&self.accent),
-                text = inline_typst(&s.text),
+            );
+            let head = match s.callout {
+                None => format!("#grid(columns: (20pt, 1fr), column-gutter: 9pt,\n    {badge},\n    pad(top: 2.5pt)[{}])", inline_typst(&s.text)),
+                Some(kind) => {
+                    let (color, label, svg) = callout_style(kind, &self.accent);
+                    let svg = svg.replace("currentColor", &color);
+                    let label = if label.is_empty() {
+                        String::new()
+                    } else {
+                        format!("#text(fill: rgb({}), weight: \"bold\", size: 8pt, tracking: 0.6pt, upper({}))\\ ", typst_str(&color), typst_str(label))
+                    };
+                    let text = if kind == Callout::Quote {
+                        format!("#text(size: 12pt, style: \"italic\")[{}]", inline_typst(&s.text))
+                    } else {
+                        inline_typst(&s.text)
+                    };
+                    format!(
+                        r##"#block(width: 100%, fill: rgb({c}).lighten(90%), stroke: (left: 3pt + rgb({c})), inset: 10pt, radius: (right: 4pt))[
+    #grid(columns: (20pt, 1fr, 40pt), column-gutter: 9pt, align: (left, horizon, right),
+      {badge},
+      [{label}{text}],
+      image(bytes({svg}), format: "svg", width: 34pt))]"##,
+                        c = typst_str(&color),
+                        svg = typst_str(&svg),
+                    )
+                }
+            };
+            src.push_str(&format!(
+                "#block(breakable: false, below: 20pt)[\n  {head}\n  {image}]\n",
                 image = image.unwrap_or_default(),
             ));
         }
@@ -202,10 +227,11 @@ mod tests {
                     number: 1,
                     text: "Click **Settings** (gear icon) and press `Ctrl+S`.".into(),
                     image: Some(GuideImage { png: png.clone(), width: 400, height: 300 }),
+                    callout: Some(Callout::Warning),
                 },
-                GuideStep { number: 2, text: "Type `$HOME/*` [done]".into(), image: None },
+                GuideStep { number: 2, text: "Type `$HOME/*` [done]".into(), image: None, callout: Some(Callout::Quote) },
                 // A tall portrait-monitor shot must not overflow the page.
-                GuideStep { number: 3, text: "Tall".into(), image: Some(GuideImage { png, width: 400, height: 1400 }) },
+                GuideStep { number: 3, text: "Tall".into(), image: Some(GuideImage { png, width: 400, height: 1400 }), callout: None },
             ],
         };
         let pdf = guide.to_pdf().unwrap();

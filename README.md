@@ -24,13 +24,22 @@ This builds `target/release/openscrib-app.exe`. From the editor you can record, 
 
 For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on its own works in a plain browser too, against a mock backend fed from `app/dev-mock/`.
 
+## Status: M5 (vision model and writing)
+
+- [x] `openscrib-vision`: a helper exe running Qwen2.5-VL 3B through llama.cpp (CPU), started by Process and closed afterwards. It's separate because whisper.cpp and llama.cpp each bundle `ggml`
+- [x] Names icon-only clicks ("the **Start** button") and fixes labels where OCR read the wrong line ("the **Local Disk (C:)** drive", not "15.9 GB free")
+- [x] Step sentences stay factual (action + name); the model only works your narration into them ("Double-click **doc**, where all the manuals are located.") and titles the guide
+- [x] Every narration segment is kept, attached to the step it follows, re-attachable in the editor, and exported as `.srt`/`.vtt` captions next to the video
+- [x] Editor additions: text and image steps, callout boxes (Note, Tip, Warning, Important, Quote), pictograph stickers, a draggable or hideable click marker, crop edges that snap to the window, and export folders named after the guide
+- [ ] GPU acceleration (Vulkan) for the vision model
+
 ## Status: M4 (narration and on-screen text)
 
 - [x] Model manager: Whisper (tiny, base, small, medium, large-v3-turbo) and the OCR models, downloaded on demand into the portable `models/` folder (`openscrib models`, or Settings in the editor)
 - [x] Narration decoded from the recording, transcribed with whisper.cpp, and matched to the nearest step. Silence and sound tags like `[typing]` are dropped
 - [x] OCR (pure-Rust `ocrs`) reads the label under each click, and any tooltip that appeared before it
 - [x] Step text drafted from these, with no language model: "Click **This PC**." instead of "Click in **…Remote Desktop…**". Text you've edited is never overwritten
-- [ ] Icons with no text (Start button, toolbar glyphs) still read "Click here"; the vision model in M5 handles those
+- [x] Icons with no text are handled by the M5 vision model
 
 ### Building with Whisper on Windows
 
@@ -119,7 +128,8 @@ the unpacked working directory. If a recording crashes, run
 | `openscrib-core` | Clock, `project.json` schema, `.scrib` pack and unpack, click markers. Has no OS dependencies. |
 | `openscrib-capture` | Input hooks, screen capture, window lookup, and the `Session` step state machine |
 | `openscrib-export` | Step image rendering, Markdown/HTML/PDF guides, video export, MP4 remux |
-| `openscrib-process` | Model downloads, Whisper transcription, OCR, drafting step text |
+| `openscrib-process` | Model downloads, Whisper transcription, OCR, vision stage, drafting step text |
+| `openscrib-vision` | Helper exe running the vision language model (llama.cpp) |
 | `openscrib-cli` | The `openscrib` binary (`record`, `export`, `process`, `models`, `info`, `probe`, `markers`, `pack`, `devices`) |
 | `app/` | Tauri 2 + Svelte 5 editor (`app/src-tauri` is the Rust side) |
 

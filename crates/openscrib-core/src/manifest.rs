@@ -106,6 +106,43 @@ pub enum StepKind {
     Click,
     Typed,
     Shortcut,
+    /// Added in the editor: text, narration and optionally an imported image.
+    Note,
+}
+
+/// Highlighted box style for a step in written guides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Callout {
+    Note,
+    Tip,
+    Warning,
+    Important,
+    Quote,
+}
+
+/// Pictographs that can be stuck onto a screenshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sticker {
+    Warning,
+    Important,
+    Info,
+    Tip,
+    Check,
+    Cross,
+    Question,
+    Quote,
+}
+
+/// One stretch of transcribed narration, assigned to a step by id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NarrationSegment {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +159,8 @@ pub enum Annotation {
     Arrow { from: Point, to: Point },
     Box { rect: Rect },
     Blur { rect: Rect },
+    /// `size` is the badge diameter in frame pixels.
+    Sticker { at: Point, icon: Sticker, size: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -164,6 +203,11 @@ pub struct Step {
     pub crop: Option<Rect>,
     #[serde(default)]
     pub annotations: Vec<Annotation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callout: Option<Callout>,
+    /// Hide the automatic click marker.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hide_marker: bool,
 }
 
 impl Step {
@@ -187,6 +231,8 @@ impl Step {
             clip: None,
             crop: None,
             annotations: Vec::new(),
+            callout: None,
+            hide_marker: false,
         }
     }
 
@@ -194,8 +240,9 @@ impl Step {
     /// (OCR), then the tooltip, then the narration, then the window title.
     pub fn draft_text(&self) -> String {
         let label = self
-            .ocr
+            .vision
             .as_deref()
+            .or(self.ocr.as_deref())
             .or(self.tooltip.as_deref())
             .map(str::trim)
             .filter(|t| !t.is_empty());
@@ -215,7 +262,7 @@ impl Step {
                     _ => "Click",
                 };
                 match (label, narration, window) {
-                    (Some(l), _, _) => format!("{verb} **{l}**."),
+                    (Some(l), _, _) => format!("{verb} {}.", target_phrase(l)),
                     (None, Some(n), _) => n,
                     (None, None, Some(t)) => format!("{verb} in **{t}**."),
                     (None, None, None) => format!("{verb} here."),
@@ -223,6 +270,7 @@ impl Step {
             }
             StepKind::Typed => format!("Type `{}`.", self.keys.as_deref().unwrap_or("")),
             StepKind::Shortcut => format!("Press **{}**.", self.keys.as_deref().unwrap_or("")),
+            StepKind::Note => narration.unwrap_or_default(),
         }
     }
 
@@ -279,6 +327,9 @@ pub struct Manifest {
     pub steps: Vec<Step>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Every transcribed segment, assigned or not, for review and captions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub narration: Vec<NarrationSegment>,
 }
 
 impl Manifest {
@@ -295,6 +346,7 @@ impl Manifest {
             audio: None,
             steps: Vec::new(),
             warnings: Vec::new(),
+            narration: Vec::new(),
         }
     }
 
@@ -323,6 +375,24 @@ impl Manifest {
         format!("#{r:02x}{g:02x}{b:02x}")
     }
 
+    /// Rebuild each step's `transcript` from the narration assigned to it.
+    pub fn sync_transcripts(&mut self) {
+        for step in &mut self.steps {
+            let text: Vec<&str> = self
+                .narration
+                .iter()
+                .filter(|s| s.step == Some(step.id))
+                .map(|s| s.text.trim())
+                .collect();
+            step.transcript = (!text.is_empty()).then(|| text.join(" "));
+        }
+    }
+
+    /// Next unused step id, for steps added in the editor.
+    pub fn next_step_id(&self) -> u32 {
+        self.steps.iter().map(|s| s.id).max().unwrap_or(0) + 1
+    }
+
     pub fn monitor(&self, id: u32) -> Option<&MonitorInfo> {
         self.monitors.iter().find(|m| m.id == id)
     }
@@ -339,6 +409,21 @@ pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
         3 => Some([((v >> 8) & 0xF) as u8 * 17, ((v >> 4) & 0xF) as u8 * 17, (v & 0xF) as u8 * 17]),
         _ => None,
     }
+}
+
+/// "Start button" reads better as "the **Start** button": keep the kind of
+/// control outside the bold name.
+pub fn target_phrase(label: &str) -> String {
+    const KINDS: [&str; 10] = ["button", "icon", "drive", "tab", "menu", "field", "folder", "link", "checkbox", "option"];
+    let label = label.trim();
+    if let Some((name, kind)) = label.rsplit_once(' ')
+        && KINDS.contains(&kind.to_ascii_lowercase().as_str())
+        && !name.is_empty()
+    {
+        let name = name.strip_prefix("the ").or_else(|| name.strip_prefix("The ")).unwrap_or(name);
+        return format!("the **{name}** {}", kind.to_ascii_lowercase());
+    }
+    format!("**{label}**")
 }
 
 /// Window titles of remote-desktop viewers describe the connection, not
@@ -425,6 +510,14 @@ mod tests {
         s.ocr = None;
         s.transcript = None;
         assert_eq!(s.draft_text(), "Click in **Rovamp - Remote Desktop**.");
+    }
+
+    #[test]
+    fn control_kinds_move_outside_the_bold() {
+        assert_eq!(target_phrase("Start button"), "the **Start** button");
+        assert_eq!(target_phrase("Local Disk (C:) drive"), "the **Local Disk (C:)** drive");
+        assert_eq!(target_phrase("This PC"), "**This PC**");
+        assert_eq!(target_phrase("button"), "**button**");
     }
 
     #[test]

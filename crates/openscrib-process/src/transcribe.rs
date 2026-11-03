@@ -41,7 +41,7 @@ pub fn transcribe(model: &Path, narration: &Narration, english_only: bool) -> Re
     let mut out = Vec::new();
     for i in 0..state.full_n_segments() {
         let Some(seg) = state.get_segment(i) else { continue };
-        if seg.no_speech_probability() > 0.6 {
+        if seg.no_speech_probability() > 0.85 {
             continue;
         }
         let text = seg.to_str_lossy().map(|t| t.trim().to_string()).unwrap_or_default();
@@ -66,34 +66,25 @@ fn is_sound_tag(text: &str) -> bool {
         .any(|(open, close)| t.starts_with(*open) && t.ends_with(*close))
 }
 
-/// People usually say what they're about to do just before doing it, so a
-/// segment is matched as if it happened this much later.
-const SPEECH_LEAD_MS: u64 = 700;
+/// Speech this close before a click is about that click ("now click Save");
+/// anything later, up to the next click, is a follow-up on it.
+const LEAD_MS: u64 = 1_500;
 
-/// Assign each segment to the step closest in time and join the text per
-/// step. `step_times` may be in any order (the editor reorders steps); the
-/// result lines up with it.
-pub fn align(step_times: &[u64], segments: &[Segment]) -> Vec<Option<String>> {
+/// For each segment, the index into `step_times` of the step it belongs to.
+/// A step owns the time from `LEAD_MS` before it until `LEAD_MS` before the
+/// next step; speech before the first step goes to the first step.
+/// `step_times` may be in any order (the editor reorders steps).
+pub fn assign(step_times: &[u64], segments: &[Segment]) -> Vec<Option<usize>> {
     let mut order: Vec<usize> = (0..step_times.len()).collect();
     order.sort_by_key(|&i| step_times[i]);
-    let mut out: Vec<Vec<&str>> = vec![Vec::new(); step_times.len()];
-    for seg in segments {
-        let at = (seg.start_ms + seg.end_ms) / 2 + SPEECH_LEAD_MS;
-        // The step window runs from halfway after the previous step to
-        // halfway before the next one.
-        let pos = order.partition_point(|&i| step_times[i] <= at);
-        let idx = match (pos.checked_sub(1), order.get(pos)) {
-            (Some(p), Some(&n)) => {
-                let prev = order[p];
-                if at - step_times[prev] <= step_times[n] - at { prev } else { n }
-            }
-            (Some(p), None) => order[p],
-            (None, Some(&n)) => n,
-            (None, None) => continue,
-        };
-        out[idx].push(seg.text.as_str());
-    }
-    out.into_iter().map(|t| (!t.is_empty()).then(|| t.join(" "))).collect()
+    segments
+        .iter()
+        .map(|seg| {
+            let at = seg.start_ms + LEAD_MS;
+            let pos = order.partition_point(|&i| step_times[i] <= at);
+            order.get(pos.saturating_sub(1)).copied()
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -105,25 +96,22 @@ mod tests {
     }
 
     #[test]
-    fn segments_go_to_the_nearest_step() {
+    fn speech_belongs_to_the_click_it_follows() {
         let steps = [2_000, 6_000, 12_000];
         let segs = [
-            seg(500, 1_500, "Open the start menu"),
-            seg(4_000, 5_000, "now this PC"),
-            seg(5_200, 5_600, "here"),
-            seg(11_000, 11_800, "and the C drive"),
+            seg(500, 1_500, "Open the start menu"),    // before any click
+            seg(2_400, 3_500, "that opens the menu"),  // follow-up on step 1
+            seg(4_800, 5_600, "now this PC"),          // just before step 2
+            seg(13_000, 15_000, "and we are done"),    // after the last click
         ];
-        assert_eq!(
-            align(&steps, &segs),
-            [Some("Open the start menu".into()), Some("now this PC here".into()), Some("and the C drive".into())]
-        );
+        assert_eq!(assign(&steps, &segs), [Some(0), Some(0), Some(1), Some(2)]);
     }
 
     #[test]
     fn works_with_reordered_steps() {
         let steps = [12_000, 2_000];
         let segs = [seg(500, 1_500, "first"), seg(11_000, 11_800, "second")];
-        assert_eq!(align(&steps, &segs), [Some("second".into()), Some("first".into())]);
-        assert_eq!(align(&[], &segs), Vec::<Option<String>>::new());
+        assert_eq!(assign(&steps, &segs), [Some(1), Some(0)]);
+        assert_eq!(assign(&[], &segs), [None, None]);
     }
 }

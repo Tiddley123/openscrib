@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { api, formatTime, localUrl, type Step } from './api'
+  import { api, formatTime, localUrl, syncTranscripts, type Callout, type Manifest, type NarrationSegment, type Step } from './api'
 
-  let { step = $bindable(), number, previewVideo, duration, nextT, ondelete }: {
+  let { step = $bindable(), manifest = $bindable(), number, previewVideo, duration, nextT, ondelete }: {
     step: Step
+    manifest: Manifest
     number: number
     previewVideo: string | null
     duration: number
@@ -63,7 +64,7 @@
     }
   }
 
-  const kinds = { click: 'Click', typed: 'Typing', shortcut: 'Shortcut' }
+  const kinds = { click: 'Click', typed: 'Typing', shortcut: 'Shortcut', note: 'Added step' }
 
   function useText(t: string) {
     step.text = t
@@ -88,7 +89,28 @@
     step.text_edited = false
     step.text = await api.draftText($state.snapshot(step)).catch(() => step.text)
   }
-  const noteLabels = { arrow: 'Arrow', box: 'Box', marker: 'Marker', blur: 'Redaction' }
+  const noteLabels = { arrow: 'Arrow', box: 'Box', marker: 'Marker', blur: 'Redaction', sticker: 'Sticker' }
+
+  const callouts: { id: Callout; label: string; glyph: string }[] = [
+    { id: 'note', label: 'Note', glyph: 'i' },
+    { id: 'tip', label: 'Tip', glyph: '★' },
+    { id: 'warning', label: 'Warning', glyph: '!' },
+    { id: 'important', label: 'Important', glyph: '!' },
+    { id: 'quote', label: 'Quote', glyph: '“' },
+  ]
+
+  // Narration: every transcribed segment, attachable to any step.
+  let mine = $derived((manifest.narration ?? []).filter((n) => n.step === step.id).length)
+  const stepNumber = (id: number) => manifest.steps.findIndex((s) => s.id === id) + 1
+
+  async function toggleNarration(n: NarrationSegment) {
+    n.step = n.step === step.id ? undefined : step.id
+    syncTranscripts(manifest)
+    // Let untouched steps pick up their new narration straight away.
+    for (const s of manifest.steps) {
+      if (!s.text_edited) s.text = await api.draftText($state.snapshot(s)).catch(() => s.text)
+    }
+  }
 </script>
 
 <aside>
@@ -112,7 +134,41 @@
         Reset to automatic text
       </button>
     {/if}
+    <div class="callouts" role="group" aria-label="Callout style">
+      {#each callouts as c}
+        <button
+          class="callout {c.id}"
+          class:on={step.callout === c.id}
+          title="Show this step as a {c.label.toLowerCase()} box with a big icon in exported guides"
+          onclick={() => (step.callout = step.callout === c.id ? undefined : c.id)}
+        >
+          <span class="glyph">{c.glyph}</span>{c.label}
+        </button>
+      {/each}
+    </div>
   </div>
+
+  {#if manifest.narration?.length}
+    <div class="section">
+      <div class="row">
+        <span class="label">Narration</span>
+        <span class="count">{mine} on this step</span>
+      </div>
+      <ul class="narr">
+        {#each manifest.narration as n}
+          {@const owner = n.step !== undefined && n.step !== step.id ? stepNumber(n.step) || null : null}
+          <li class:mine={n.step === step.id}>
+            <span class="time">{formatTime(n.start_ms)}</span>
+            <span class="said">{n.text}</span>
+            <button class="ghost small" onclick={() => toggleNarration(n)} title={n.step === step.id ? 'Detach from this step' : 'Attach to this step'}>
+              {n.step === step.id ? 'Detach' : owner ? `Move from ${owner}` : 'Attach'}
+            </button>
+          </li>
+        {/each}
+      </ul>
+      <p class="hint">Everything said while recording. Attach a line to this step to use it in the step text; all of it becomes video captions.</p>
+    </div>
+  {/if}
 
   {#if step.transcript || step.ocr || step.tooltip}
     <div class="section">
@@ -283,6 +339,67 @@
   }
   .clip {
     font-size: 13px;
+  }
+  .callouts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .callout {
+    padding: 3px 9px 3px 4px;
+    font-size: 12px;
+    border-radius: 99px;
+    gap: 5px;
+    --c: #0a84ff;
+  }
+  .callout.tip { --c: #30a46c; }
+  .callout.warning { --c: #f5a524; }
+  .callout.important { --c: #e5484d; }
+  .callout.quote { --c: var(--accent); }
+  .callout .glyph {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--c);
+    color: #fff;
+    font-weight: 800;
+    font-size: 11px;
+  }
+  .callout.on {
+    border-color: var(--c);
+    background: color-mix(in srgb, var(--c) 14%, var(--panel));
+  }
+  .count {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .narr {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 240px;
+    overflow: auto;
+    display: grid;
+    gap: 2px;
+  }
+  .narr li {
+    display: grid;
+    grid-template-columns: 44px 1fr auto;
+    gap: 8px;
+    align-items: baseline;
+    padding: 5px 6px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .narr li.mine {
+    background: var(--accent-soft);
+  }
+  .narr .time {
+    color: var(--muted);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
   }
   .reset {
     justify-self: start;

@@ -1,7 +1,8 @@
 <script lang="ts">
   import { listen } from '@tauri-apps/api/event'
   import { onMount } from 'svelte'
-  import { api, type Manifest, type ProcessProgress, type ProcessReport, type ProjectView, type Rect } from './api'
+  import { open as openDialog } from '@tauri-apps/plugin-dialog'
+  import { api, type Manifest, type ProcessProgress, type ProcessReport, type ProjectView, type Rect, type Step } from './api'
   import { settings } from './settings.svelte'
   import ExportDialog from './ExportDialog.svelte'
   import Inspector from './Inspector.svelte'
@@ -54,6 +55,35 @@
     const steps = project.manifest.steps
     const [moved] = steps.splice(from, 1)
     steps.splice(to, 0, moved)
+  }
+
+  /// Window and client rects of the step's target, in frame pixels.
+  function snapRects(s: Step): Rect[] {
+    const mon = project.manifest.monitors.find((m) => m.id === s.monitor)
+    if (!s.window || !mon) return []
+    const toFrame = (r: Rect): Rect => ({ x: r.x - mon.rect.x, y: r.y - mon.rect.y, w: r.w, h: r.h })
+    return [s.window.rect, ...(s.window.client ? [s.window.client] : [])].map(toFrame)
+  }
+
+  async function addStep(withImage: boolean) {
+    const steps = project.manifest.steps
+    const at = index >= 0 ? index + 1 : steps.length
+    const id = Math.max(0, ...steps.map((s) => s.id)) + 1
+    const prev = steps[at - 1]
+    const step: Step = { id, t_ms: prev?.t_ms ?? 0, kind: 'note', text: '', text_edited: true, annotations: [] }
+    if (withImage) {
+      const path = await openDialog({
+        multiple: false,
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }],
+      })
+      if (typeof path !== 'string') return
+      const img = await api.importImage(path, id)
+      step.frame = img.rel
+      sizeById.set(id, [img.width, img.height])
+    }
+    cropById.set(id, null)
+    steps.splice(at, 0, step)
+    selectedId = id
   }
 
   function remove(id: number) {
@@ -198,6 +228,7 @@
       onselect={(id) => (selectedId = id)}
       onreorder={reorder}
       ondelete={remove}
+      onadd={addStep}
     />
 
     <section class="stage">
@@ -209,6 +240,7 @@
             size={sizeById.get(step.id) ?? null}
             defaultCrop={cropById.get(step.id) ?? null}
             {highlight}
+            snapRects={snapRects(step)}
           />
         {/key}
       {:else}
@@ -219,6 +251,7 @@
     {#if step}
       <Inspector
         bind:step={project.manifest.steps[index]}
+        bind:manifest={project.manifest}
         number={index + 1}
         previewVideo={project.preview_video}
         duration={project.manifest.duration_ms}

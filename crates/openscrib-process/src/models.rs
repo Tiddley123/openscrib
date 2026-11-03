@@ -15,6 +15,8 @@ pub enum ModelKind {
     Whisper,
     OcrDetection,
     OcrRecognition,
+    VisionModel,
+    VisionProjector,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -82,6 +84,24 @@ pub const CATALOG: &[ModelInfo] = &[
         size_mb: 547,
     },
     ModelInfo {
+        id: "qwen2.5-vl-3b",
+        kind: ModelKind::VisionModel,
+        label: "Qwen2.5-VL 3B",
+        note: "Names icons and writes step text",
+        file: "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
+        url: "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
+        size_mb: 1930,
+    },
+    ModelInfo {
+        id: "qwen2.5-vl-3b-vision",
+        kind: ModelKind::VisionProjector,
+        label: "Qwen2.5-VL 3B image encoder",
+        note: "Lets the model see screenshots",
+        file: "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
+        url: "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
+        size_mb: 845,
+    },
+    ModelInfo {
         id: "ocr-detection",
         kind: ModelKind::OcrDetection,
         label: "OCR text detection",
@@ -136,6 +156,13 @@ pub fn ocr_paths() -> Option<(PathBuf, PathBuf)> {
     let det = CATALOG.iter().find(|m| m.kind == ModelKind::OcrDetection)?;
     let rec = CATALOG.iter().find(|m| m.kind == ModelKind::OcrRecognition)?;
     (installed(det) && installed(rec)).then(|| (path(det), path(rec)))
+}
+
+/// The vision language model and its image projector, if both are present.
+pub fn vision_paths() -> Option<(PathBuf, PathBuf)> {
+    let model = CATALOG.iter().find(|m| m.kind == ModelKind::VisionModel)?;
+    let proj = CATALOG.iter().find(|m| m.kind == ModelKind::VisionProjector)?;
+    (installed(model) && installed(proj)).then(|| (path(model), path(proj)))
 }
 
 /// Download `m` into the models folder, reporting `(bytes, total)`.
@@ -196,7 +223,7 @@ mod tests {
             assert!(m.url.ends_with(m.file), "{} url/file mismatch", m.id);
             if m.kind == ModelKind::Whisper {
                 assert!(m.url.starts_with(WHISPER_BASE));
-            } else {
+            } else if matches!(m.kind, ModelKind::OcrDetection | ModelKind::OcrRecognition) {
                 assert!(m.url.starts_with(OCR_BASE));
             }
         }

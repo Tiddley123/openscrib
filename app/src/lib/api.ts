@@ -12,6 +12,17 @@ export type Annotation =
   | { type: 'arrow'; from: Point; to: Point }
   | { type: 'box'; rect: Rect }
   | { type: 'blur'; rect: Rect }
+  | { type: 'sticker'; at: Point; icon: StickerIcon; size: number }
+
+export type StickerIcon = 'warning' | 'important' | 'info' | 'tip' | 'check' | 'cross' | 'question' | 'quote'
+export type Callout = 'note' | 'tip' | 'warning' | 'important' | 'quote'
+
+export interface NarrationSegment {
+  start_ms: number
+  end_ms: number
+  text: string
+  step?: number
+}
 
 export interface Click {
   x: number
@@ -37,7 +48,7 @@ export interface Clip {
 export interface Step {
   id: number
   t_ms: number
-  kind: 'click' | 'typed' | 'shortcut'
+  kind: 'click' | 'typed' | 'shortcut' | 'note'
   click?: Click
   keys?: string
   monitor?: number
@@ -53,6 +64,8 @@ export interface Step {
   clip?: Clip
   crop?: Rect
   annotations: Annotation[]
+  callout?: Callout
+  hide_marker?: boolean
 }
 
 export interface MonitorInfo {
@@ -75,6 +88,7 @@ export interface Manifest {
   audio?: { file: string; device: string; device_rate: number; channels: number; first_ms: number }
   steps: Step[]
   warnings?: string[]
+  narration?: NarrationSegment[]
 }
 
 export interface ProjectView {
@@ -111,7 +125,7 @@ export interface RecordRequest {
 
 export interface ModelStatus {
   id: string
-  kind: 'whisper' | 'ocr_detection' | 'ocr_recognition'
+  kind: 'whisper' | 'ocr_detection' | 'ocr_recognition' | 'vision_model' | 'vision_projector'
   label: string
   note: string
   file: string
@@ -156,12 +170,15 @@ export const api = {
     invoke<string>('start_recording', { req }),
   stopRecording: () => invoke<void>('stop_recording'),
   listDevices: () => (dev ? mockApi.listDevices() : invoke<Devices>('list_devices')),
-  defaultExportDir: () => (dev ? mockApi.defaultExportDir() : invoke<string>('default_export_dir')),
+  defaultExportDir: (title: string | null) =>
+    dev ? mockApi.defaultExportDir() : invoke<string>('default_export_dir', { title }),
   listModels: () => (dev ? mockApi.listModels() : invoke<ModelStatus[]>('list_models')),
   downloadModel: (id: string) => invoke<void>('download_model', { id }),
   removeModel: (id: string) => invoke<void>('remove_model', { id }),
   processProject: (manifest: Manifest, whisper: string | null) => invoke<void>('process_project', { manifest, whisper }),
   draftText: (step: Step) => invoke<string>('draft_text', { step }),
+  importImage: (path: string, stepId: number) =>
+    invoke<{ rel: string; width: number; height: number }>('import_image', { path, stepId }),
 }
 
 /** URL the WebView can load for a file inside the open project. */
@@ -178,4 +195,12 @@ export function formatTime(ms: number): string {
   const s = Math.max(0, ms) / 1000
   const m = Math.floor(s / 60)
   return `${m}:${(s - m * 60).toFixed(1).padStart(4, '0')}`
+}
+
+/** Rebuild each step's transcript from the narration assigned to it. */
+export function syncTranscripts(m: Manifest) {
+  for (const s of m.steps) {
+    const parts = (m.narration ?? []).filter((n) => n.step === s.id).map((n) => n.text.trim())
+    s.transcript = parts.length ? parts.join(' ') : undefined
+  }
 }

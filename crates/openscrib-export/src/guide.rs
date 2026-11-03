@@ -12,6 +12,8 @@ use openscrib_core::{Manifest, ProjectDir};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd, html};
 
 use crate::render::{RenderOptions, render_step};
+use crate::icons::callout_style;
+use openscrib_core::Callout;
 
 pub const DEFAULT_TITLE: &str = "Recorded guide";
 
@@ -20,6 +22,7 @@ pub struct GuideStep {
     /// Step text as written in the editor (inline Markdown).
     pub text: String,
     pub image: Option<GuideImage>,
+    pub callout: Option<Callout>,
 }
 
 pub struct GuideImage {
@@ -47,7 +50,7 @@ impl Guide {
                 }
                 None => None,
             };
-            steps.push(GuideStep { number: i + 1, text: step.text.trim().to_string(), image });
+            steps.push(GuideStep { number: i + 1, text: step.text.trim().to_string(), image, callout: step.callout });
         }
         let title = manifest
             .title
@@ -87,9 +90,17 @@ impl Guide {
         let mut body = String::new();
         for s in &self.steps {
             body.push_str(&format!(
-                "<li class=\"step\"><div class=\"head\"><span class=\"n\">{}</span><div class=\"text\">{}</div></div>",
+                "<li class=\"step{}\"{}><div class=\"head\"><span class=\"n\">{}</span><div class=\"text\">{}{}</div>{}</div>",
+                if s.callout.is_some() { " callout" } else { "" },
+                s.callout.map(|k| format!(" style=\"--c:{}\"", callout_style(k, &self.accent).0)).unwrap_or_default(),
                 s.number,
-                inline_html(&s.text)
+                s.callout
+                    .map(|k| callout_style(k, &self.accent).1)
+                    .filter(|l| !l.is_empty())
+                    .map(|l| format!("<div class=\"clabel\">{l}</div>"))
+                    .unwrap_or_default(),
+                inline_html(&s.text),
+                s.callout.map(|k| format!("<div class=\"cicon\">{}</div>", callout_style(k, &self.accent).2)).unwrap_or_default(),
             ));
             if let Some(img) = &s.image {
                 body.push_str(&format!(
@@ -196,6 +207,10 @@ ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 28px; }
 .n { flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: #fff;
   font-weight: 700; font-size: 14px; display: grid; place-items: center; }
 .text { padding-top: 3px; font-size: 17px; }
+.step.callout { border-left: 5px solid var(--c); background: color-mix(in srgb, var(--c) 7%, var(--card)); }
+.cicon { flex: none; margin-left: auto; width: 56px; height: 56px; color: var(--c); }
+.cicon svg { width: 100%; height: 100%; display: block; }
+.clabel { color: var(--c); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 2px; }
 code { font: 0.92em ui-monospace, "Cascadia Mono", Consolas, monospace; background: var(--bg);
   border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
 img { display: block; width: 100%; height: auto; margin-top: 16px; border-radius: 10px; border: 1px solid var(--line); }

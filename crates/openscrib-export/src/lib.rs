@@ -2,6 +2,7 @@
 //! and redactions, Markdown, HTML, PDF, and the stitched video.
 
 pub mod guide;
+pub mod icons;
 pub mod pdf;
 pub mod render;
 pub mod video;
