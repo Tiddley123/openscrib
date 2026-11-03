@@ -37,7 +37,7 @@ For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on it
 
 - [x] Portable Windows release: `scriptspackage-windows.ps1` builds `distOpenSCRIB-<version>-windows-x64` (and a zip) with the app, CLI (`openscrib-cli.exe`), vision helper and app-local Visual C++ runtime
 - [x] First-run OpenH264: **Get OpenH264** on the home screen (or `openscrib setup`) downloads Cisco's build and checks its SHA-256
-- [x] Voiceover: Piper reads the step text aloud in video exports (Settings -> Models for the engine and voice, `--voiceover` in the CLI); captions follow the spoken text. Not on macOS: Piper's Mac release ships x86_64 binaries labelled aarch64, unsigned and without the libraries they link, so the engine is left out of the catalogue there
+- [x] Voiceover: the step text is read aloud in video exports and the captions follow the spoken text (`--voiceover` in the CLI, Settings -> Models in the editor). Windows and Linux download Piper and a voice; macOS speaks through the voices it already ships, so there is nothing to download there
 - [x] Redactions and crops carry forward to later steps of the same screen; redactions are also painted into the exported video while their step is active
 - [x] macOS release: `scripts/package-macos.sh` builds, Developer ID signs and packages `OpenSCRIB.app` (with the CLI and vision helper inside it) as a .dmg and a .zip; `--notarize <profile>` submits it to Apple and staples the ticket
 - [x] macOS capture: window and Dock lookups through CoreGraphics, points converted to pixels at the boundary, Metal for Whisper and the vision model, Screen Recording and Accessibility onboarding on the home screen, and capture checks in `openscrib devices`
@@ -75,6 +75,17 @@ to pixels at the boundary and everything above it works as it does on
 Windows. The app writes nothing inside its own bundle: recordings go to
 `~/Documents/OpenSCRIB`, models and OpenH264 to
 `~/Library/Application Support/OpenSCRIB`.
+
+Voiceover uses the speech macOS already has, through `/usr/bin/say`, rather
+than Piper: Piper's Mac release ships x86_64 binaries labelled aarch64,
+unsigned and without the libraries they link, so nothing in that 19 MB
+download can run. The system voices need no download, no signing and no
+entitlement, so neither the Piper engine nor its voices appear in the model
+catalogue on macOS. Settings -> Models lists the installed voices by
+language, `openscrib models` prints them, and either place's name goes to
+`--voiceover` (`openscrib export rec.scrib -f mp4 --voiceover Samantha`); an
+unrecognised name falls back to the voice chosen in System Settings ->
+Accessibility -> Spoken Content.
 
 ### Building with Whisper on Windows
 

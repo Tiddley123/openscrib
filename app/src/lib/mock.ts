@@ -3,7 +3,7 @@
 // app/dev-mock/ (gitignored; put an unpacked .scrib in dev-mock/project and
 // an MP4 at dev-mock/preview.mp4).
 
-import type { Manifest, ModelStatus, ProjectView, RecentItem } from './api'
+import type { Manifest, ModelStatus, ProjectView, RecentItem, SystemVoice } from './api'
 
 export const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -45,6 +45,14 @@ export const mockApi = {
       m('large-v3-turbo', 'whisper', 'Whisper large v3 turbo (multilingual)', 547, false),
       m('ocr-detection', 'ocr_detection', 'OCR text detection', 3, true),
       m('ocr-recognition', 'ocr_recognition', 'OCR text recognition', 10, true),
+    ]
+  },
+
+  async listVoices(): Promise<SystemVoice[]> {
+    return [
+      { name: 'Samantha', locale: 'en_US' },
+      { name: 'Daniel', locale: 'en_GB' },
+      { name: 'Anna', locale: 'de_DE' },
     ]
   },
 }

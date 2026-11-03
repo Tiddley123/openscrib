@@ -144,6 +144,12 @@ export interface ModelStatus {
   installed: boolean
 }
 
+/** A voice the system speech synthesiser offers; nothing to download. */
+export interface SystemVoice {
+  name: string
+  locale: string
+}
+
 export interface ProcessReport {
   segments: number
   steps_with_narration: number
@@ -184,6 +190,7 @@ export const api = {
   defaultExportDir: (title: string | null) =>
     dev ? mockApi.defaultExportDir() : invoke<string>('default_export_dir', { title }),
   listModels: () => (dev ? mockApi.listModels() : invoke<ModelStatus[]>('list_models')),
+  listVoices: () => (dev ? mockApi.listVoices() : invoke<SystemVoice[]>('list_voices')),
   downloadModel: (id: string) => invoke<void>('download_model', { id }),
   removeModel: (id: string) => invoke<void>('remove_model', { id }),
   processProject: (manifest: Manifest, whisper: string | null) => invoke<void>('process_project', { manifest, whisper }),

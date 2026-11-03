@@ -15,6 +15,7 @@ use openscrib_core::project::{SCREEN_FILE, read_packed_manifest};
 use openscrib_core::{Manifest, PROJECT_EXT, ProjectDir, Rect};
 use openscrib_export::render::{CropMode, RenderOptions, default_crop};
 use openscrib_export::video::{VideoExportOptions, VideoFormat, export_video, remux_to_mp4};
+use openscrib_export::voiceover;
 use openscrib_export::Guide;
 use openscrib_process::{ProcessOptions, models};
 use serde::{Deserialize, Serialize};
@@ -183,7 +184,8 @@ struct ExportRequest {
     quality: u8,
     /// 0 keeps the recording's own width.
     max_width: u32,
-    /// Piper voice id to read the steps aloud with, replacing the narration.
+    /// Voice to read the steps aloud with, replacing the narration: a Piper
+    /// voice id, or a macOS voice name. `None` keeps the narration.
     #[serde(default)]
     voiceover: Option<String>,
 }
@@ -268,15 +270,7 @@ fn run_export(app: &AppHandle, dir: &ProjectDir, req: ExportRequest) -> anyhow::
                 opts.quality = req.quality.clamp(1, 100);
                 opts.max_width = if req.max_width == 0 { u32::MAX } else { req.max_width };
                 if let Some(voice) = &req.voiceover {
-                    let (piper, model) = models::tts_paths(Some(voice))
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(if cfg!(target_os = "macos") {
-                                "voiceover isn't available on macOS yet"
-                            } else {
-                                "voiceover needs the Piper engine and a voice (Settings -> Models)"
-                            })
-                        })?;
-                    opts.voiceover = Some(openscrib_export::voiceover::Voice { piper, model });
+                    opts.voiceover = Some(pick_voice(voice)?);
                 }
                 export_video(dir, &manifest, &opts, &p, |k| progress(f, k))?;
                 p
@@ -402,6 +396,29 @@ struct ModelStatus {
     #[serde(flatten)]
     info: models::ModelInfo,
     installed: bool,
+}
+
+/// The voice a video voiceover should use. On Windows and Linux that means
+/// Piper and one of its voices, both downloaded; on macOS the synthesiser is
+/// already there, so any name it knows will do and an unknown one leaves the
+/// user's own default voice in place.
+#[cfg(not(target_os = "macos"))]
+fn pick_voice(id: &str) -> anyhow::Result<voiceover::Voice> {
+    let (exe, model) = models::tts_paths(Some(id))
+        .ok_or_else(|| anyhow::anyhow!("voiceover needs the Piper engine and a voice (Settings -> Models)"))?;
+    Ok(voiceover::Voice::Piper { exe, model })
+}
+
+#[cfg(target_os = "macos")]
+fn pick_voice(name: &str) -> anyhow::Result<voiceover::Voice> {
+    Ok(voiceover::Voice::system(Some(name)))
+}
+
+/// Voices the system speech synthesiser offers, which the Models pane lists
+/// instead of downloads. Empty where voiceover needs Piper.
+#[tauri::command]
+fn list_voices() -> Vec<voiceover::SystemVoice> {
+    voiceover::system_voices()
 }
 
 #[tauri::command]
@@ -605,6 +622,7 @@ pub fn run() {
             list_devices,
             default_export_dir,
             list_models,
+            list_voices,
             download_model,
             remove_model,
             process_project,

@@ -56,7 +56,8 @@ enum Cmd {
         #[arg(long, default_value_t = 1920)]
         max_width: u32,
         /// Read the step text aloud instead of using the recorded narration
-        /// (Piper voice id, e.g. voice-en-us; see `models`).
+        /// (Piper voice id such as voice-en-us on Windows and Linux, or a
+        /// macOS voice name such as Samantha; both are listed by `models`.)
         #[arg(long)]
         voiceover: Option<String>,
     },
@@ -443,13 +444,7 @@ fn export(
                 opts.quality = quality;
                 opts.max_width = if max_width == 0 { u32::MAX } else { max_width };
                 if let Some(v) = voiceover {
-                    let (piper, model) = openscrib_process::models::tts_paths(Some(v))
-                        .context(if cfg!(target_os = "macos") {
-                            "voiceover isn't available on macOS yet: the Piper release for Macs ships binaries that can't run"
-                        } else {
-                            "voiceover needs Piper and a voice: openscrib models download piper && openscrib models download voice-en-us"
-                        })?;
-                    opts.voiceover = Some(openscrib_export::voiceover::Voice { piper, model });
+                    opts.voiceover = Some(voice(v)?);
                 }
                 let started = std::time::Instant::now();
                 let mut shown = 0;
@@ -501,6 +496,25 @@ fn ensure_guide<'a>(
     Ok(cache.as_ref().expect("just built"))
 }
 
+/// The voice `--voiceover` asked for. Windows and Linux need Piper and a
+/// voice downloaded; macOS speaks through the synthesiser it already ships,
+/// so a name it doesn't know just means the user's own default voice.
+#[cfg(not(target_os = "macos"))]
+fn voice(id: &str) -> Result<openscrib_export::voiceover::Voice> {
+    let (exe, model) = openscrib_process::models::tts_paths(Some(id))
+        .context("voiceover needs Piper and a voice: openscrib models download piper && openscrib models download voice-en-us")?;
+    Ok(openscrib_export::voiceover::Voice::Piper { exe, model })
+}
+
+#[cfg(target_os = "macos")]
+fn voice(name: &str) -> Result<openscrib_export::voiceover::Voice> {
+    let v = openscrib_export::voiceover::Voice::system(Some(name));
+    if matches!(&v, openscrib_export::voiceover::Voice::System { name: None }) && !name.is_empty() {
+        tracing::warn!("no voice called \"{name}\" here, using the system default; run `openscrib models` for the list");
+    }
+    Ok(v)
+}
+
 fn models(action: Option<ModelsCmd>) -> Result<()> {
     use openscrib_process::models::{self, CATALOG};
 
@@ -510,6 +524,13 @@ fn models(action: Option<ModelsCmd>) -> Result<()> {
             for m in CATALOG {
                 let state = if models::installed(m) { "installed" } else { "-" };
                 println!("  {:<16} {:>6} MB  {:<10} {} ({})", m.id, m.size_mb, state, m.label, m.note);
+            }
+            let voices = openscrib_export::voiceover::system_voices();
+            if !voices.is_empty() {
+                println!("Voiceover voices built into this system (nothing to download; use with --voiceover):");
+                for v in &voices {
+                    println!("  {:<28} {}", v.name, v.locale);
+                }
             }
         }
         Some(ModelsCmd::Download { id }) => {

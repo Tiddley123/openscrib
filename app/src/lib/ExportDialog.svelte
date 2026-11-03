@@ -36,11 +36,13 @@
   let clipCount = $derived(manifest.steps.filter((s) => s.clip).length)
 
   onMount(() => {
-    api
-      .listModels()
-      .then((ms) => {
+    // Voiceover needs either a voice built into the system or Piper and one
+    // of its voices downloaded.
+    Promise.all([api.listModels(), api.listVoices()])
+      .then(([ms, vs]) => {
         voiceReady =
-          ms.some((m) => m.kind === 'tts_engine' && m.installed) && ms.some((m) => m.kind === 'tts_voice' && m.installed)
+          vs.length > 0 ||
+          (ms.some((m) => m.kind === 'tts_engine' && m.installed) && ms.some((m) => m.kind === 'tts_voice' && m.installed))
       })
       .catch(() => {})
     api.defaultExportDir(manifest.title ?? null).then((d) => (outDir = d))

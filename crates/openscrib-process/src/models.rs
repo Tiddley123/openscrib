@@ -37,7 +37,11 @@ pub struct ModelInfo {
 /// Piper ships one archive per platform, each with the binary and its
 /// libraries in a top-level `piper/` folder. Not macOS: that release's
 /// "aarch64" archive holds x86_64 binaries, unsigned, without the libraries
-/// they link, so nothing in it can run. Voiceover waits for a macOS voice.
+/// they link, so nothing in it can run. Macs don't need it — voiceover there
+/// speaks through the synthesiser the system already ships, which is why
+/// neither the engine nor a voice appears in the catalogue on macOS. The
+/// voices it offers are discovered at runtime instead:
+/// `openscrib_export::voiceover::system_voices`.
 #[cfg(windows)]
 const PIPER_FILE: &str = "piper/piper.exe";
 #[cfg(all(unix, not(target_os = "macos")))]

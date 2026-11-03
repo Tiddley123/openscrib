@@ -1,10 +1,11 @@
 <script lang="ts">
   import { listen } from '@tauri-apps/api/event'
   import { onMount } from 'svelte'
-  import { api, type ModelStatus } from './api'
+  import { api, type ModelStatus, type SystemVoice } from './api'
   import { settings } from './settings.svelte'
 
   let models = $state<ModelStatus[]>([])
+  let systemVoices = $state<SystemVoice[]>([])
   let progress = $state<Record<string, number>>({})
   let errors = $state<Record<string, string>>({})
 
@@ -18,8 +19,44 @@
   let ocrReady = $derived(ocr.length > 0 && ocr.every((m) => m.installed))
   let ocrSize = $derived(ocr.reduce((n, m) => n + m.size_mb, 0))
 
+  // System voices come from the OS, so they group by language rather than by
+  // download size. The user's own language leads the list.
+  let voiceGroups = $derived(groupByLanguage(systemVoices))
+
   async function refresh() {
     models = await api.listModels().catch(() => [])
+    systemVoices = await api.listVoices().catch(() => [])
+    // A voice saved on another machine, or the Piper default, isn't one of
+    // these; show the system's own voice as the choice instead.
+    if (systemVoices.length && !systemVoices.some((v) => v.name === settings.voice)) {
+      settings.voice = ''
+    }
+  }
+
+  function languageName(locale: string): string {
+    try {
+      return new Intl.DisplayNames(undefined, { type: 'language' }).of(locale.replace('_', '-')) ?? locale
+    } catch {
+      return locale
+    }
+  }
+
+  type VoiceGroup = { locale: string; label: string; first: boolean; voices: SystemVoice[] }
+
+  function groupByLanguage(voices: SystemVoice[]): VoiceGroup[] {
+    const own = (navigator.language || 'en').slice(0, 2).toLowerCase()
+    const groups = new Map<string, VoiceGroup>()
+    for (const v of voices) {
+      const g = groups.get(v.locale) ?? {
+        locale: v.locale,
+        label: languageName(v.locale),
+        first: v.locale.toLowerCase().startsWith(own),
+        voices: [],
+      }
+      g.voices.push(v)
+      groups.set(v.locale, g)
+    }
+    return [...groups.values()].sort((a, b) => Number(b.first) - Number(a.first) || a.label.localeCompare(b.label))
   }
 
   onMount(() => {
@@ -145,11 +182,33 @@
 
 <section>
   <div class="label">Voiceover</div>
-  <p class="hint">Reads each step's text aloud in exported videos, instead of your recorded narration. Needs the engine and one voice.</p>
-  {#if !engine}
-    <p class="hint">Not available on macOS yet: the Piper release for Macs ships binaries that can't run. Exported videos keep your recorded narration.</p>
-  {/if}
+  <p class="hint">
+    Reads each step's text aloud in exported videos, instead of your recorded narration.
+    {#if systemVoices.length}
+      Uses the speech built into macOS, so there is nothing to download.
+    {:else}
+      Needs the engine and one voice.
+    {/if}
+  </p>
   <ul>
+    {#if systemVoices.length}
+      <li class="voice-pick">
+        <label>
+          <span class="name">Voice</span>
+          <select bind:value={settings.voice}>
+            <option value="">System default</option>
+            {#each voiceGroups as g (g.locale)}
+              <optgroup label={g.label}>
+                {#each g.voices as v (v.name)}
+                  <option value={v.name}>{v.name}</option>
+                {/each}
+              </optgroup>
+            {/each}
+          </select>
+        </label>
+        <span class="note">Add more in System Settings → Accessibility → Spoken Content → System Voice.</span>
+      </li>
+    {/if}
     {#if engine}
       <li class:active={engine.installed}>
         <span class="name">{engine.label}</span>
@@ -242,6 +301,17 @@
   li > .pct {
     grid-column: 2;
     grid-row: 1 / span 2;
+  }
+  .voice-pick {
+    grid-template-columns: 1fr;
+  }
+  .voice-pick label {
+    grid-template-columns: auto 1fr;
+    column-gap: 10px;
+    justify-items: start;
+  }
+  .voice-pick select {
+    max-width: 100%;
   }
   .small {
     padding: 4px 10px;

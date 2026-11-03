@@ -1,20 +1,48 @@
-//! Voiceover for exported video: each step's text read aloud by Piper (a
-//! small offline text-to-speech engine run as a helper process), placed at
-//! that step on the output timeline and encoded as the Opus audio track.
+//! Voiceover for exported video: each step's text read aloud, placed at that
+//! step on the output timeline and encoded as the Opus audio track. The
+//! speaking is done by a helper process: Piper, a small offline
+//! text-to-speech engine downloaded on demand, on Windows and Linux, and
+//! `say` on macOS, which drives the speech synthesiser the system already
+//! ships. Either way `speak` hands back 48 kHz mono.
 
-use std::io::{Read, Write};
+#[cfg(not(target_os = "macos"))]
+use std::io::Read;
+use std::io::Write;
+#[cfg(not(target_os = "macos"))]
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use openscrib_core::mkv::OPUS_SAMPLE_RATE;
 use openscrib_core::{Manifest, Step, StepKind};
+use serde::Serialize;
 
+/// What reads the steps aloud. Only one of these exists per platform.
 #[derive(Debug, Clone)]
-pub struct Voice {
-    pub piper: PathBuf,
-    /// Voice model (`.onnx`, with its `.onnx.json` next to it).
-    pub model: PathBuf,
+pub enum Voice {
+    /// Piper and one of its voices, both from the model catalogue.
+    #[cfg(not(target_os = "macos"))]
+    Piper {
+        exe: PathBuf,
+        /// Voice model (`.onnx`, with its `.onnx.json` next to it).
+        model: PathBuf,
+    },
+    /// The macOS speech synthesiser, through `/usr/bin/say`.
+    #[cfg(target_os = "macos")]
+    System {
+        /// A `say -v` voice name, or `None` for the one chosen in System
+        /// Settings.
+        name: Option<String>,
+    },
+}
+
+/// A voice the system speech synthesiser offers, with nothing to download.
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemVoice {
+    /// What `say -v` takes, and what settings store.
+    pub name: String,
+    /// Locale as `say` prints it, such as `en_AU`.
+    pub locale: String,
 }
 
 /// Pause between consecutive spoken steps.
@@ -44,39 +72,197 @@ pub fn spoken_text(step: &Step) -> String {
 }
 
 impl Voice {
-    fn sample_rate(&self) -> u32 {
-        // Piper voices state their rate in the config; 22050 is the common one.
-        std::fs::read_to_string(self.model.with_extension("onnx.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .and_then(|v| v["audio"]["sample_rate"].as_u64())
-            .unwrap_or(22_050) as u32
-    }
-
     /// Synthesise `text` as 48 kHz mono.
     pub fn speak(&self, text: &str) -> Result<Vec<f32>> {
-        let mut cmd = Command::new(&self.piper);
-        cmd.arg("--model").arg(&self.model).arg("--output_raw");
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        // Both helpers take one line at a time.
+        let line = text.replace('\n', " ");
+        match self {
+            #[cfg(not(target_os = "macos"))]
+            Self::Piper { exe, model } => speak_piper(exe, model, &line),
+            #[cfg(target_os = "macos")]
+            Self::System { name } => speak_say(name.as_deref(), &line),
         }
-        let mut child = cmd.spawn().with_context(|| format!("starting {}", self.piper.display()))?;
-        {
-            let mut stdin = child.stdin.take().context("piper stdin")?;
-            stdin.write_all(text.replace('\n', " ").as_bytes())?;
-            stdin.write_all(b"\n")?;
-        }
-        let mut raw = Vec::new();
-        child.stdout.take().context("piper stdout")?.read_to_end(&mut raw)?;
-        if !child.wait()?.success() {
-            bail!("the voice engine failed");
-        }
-        let samples: Vec<f32> = raw.as_chunks::<2>().0.iter().map(|c| i16::from_le_bytes(*c) as f32 / 32768.0).collect();
-        Ok(resample(&samples, self.sample_rate(), OPUS_SAMPLE_RATE))
     }
+
+    /// The system voice called `name`, or the user's own default when that is
+    /// empty or names a voice this Mac doesn't have (settings outlive the
+    /// voices they were saved with).
+    #[cfg(target_os = "macos")]
+    pub fn system(name: Option<&str>) -> Self {
+        let installed = system_voices();
+        let name = name
+            .filter(|n| !n.is_empty() && installed.iter().any(|v| v.name == *n))
+            .map(str::to_owned);
+        Self::System { name }
+    }
+}
+
+/// Voices the system speech synthesiser can read step text with. Empty off
+/// macOS, where voiceover downloads Piper and a voice instead.
+pub fn system_voices() -> Vec<SystemVoice> {
+    #[cfg(not(target_os = "macos"))]
+    return Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        let out = Command::new(SAY).arg("-v").arg("?").output();
+        let out = match out {
+            Ok(o) if o.status.success() => o.stdout,
+            _ => return Vec::new(),
+        };
+        parse_voices(&String::from_utf8_lossy(&out))
+    }
+}
+
+/// `/usr/bin/say` rather than `say`, so a `say` earlier on the PATH can't
+/// stand in for it.
+#[cfg(target_os = "macos")]
+const SAY: &str = "/usr/bin/say";
+
+/// Apple's novelty voices: sound effects and jokes rather than speech, so
+/// never what someone wants reading a guide aloud.
+#[cfg(target_os = "macos")]
+const NOVELTY: &[&str] = &[
+    "Albert", "Bad News", "Bahh", "Bells", "Boing", "Bubbles", "Cellos", "Good News", "Jester", "Organ", "Superstar",
+    "Trinoids", "Whisper", "Wobble", "Zarvox",
+];
+
+/// Read `say -v '?'`, whose lines are `name`, locale, then `# a sample
+/// sentence`. Names run from novelty ("Bad News") to parenthesised
+/// ("Eddy (English (US))"), so the locale is taken as the last word before
+/// the sample and everything before it is the name.
+#[cfg(target_os = "macos")]
+fn parse_voices(listing: &str) -> Vec<SystemVoice> {
+    let mut out: Vec<SystemVoice> = listing
+        .lines()
+        .filter_map(|line| {
+            let head = line.split('#').next()?.trim_end();
+            let (name, locale) = head.rsplit_once(char::is_whitespace)?;
+            let name = name.trim();
+            if name.is_empty() || !locale.contains('_') || NOVELTY.contains(&name) {
+                return None;
+            }
+            Some(SystemVoice { name: name.to_owned(), locale: locale.to_owned() })
+        })
+        .collect();
+    out.sort_by(|a, b| a.locale.cmp(&b.locale).then_with(|| a.name.cmp(&b.name)));
+    out.dedup_by(|a, b| a.name == b.name && a.locale == b.locale);
+    out
+}
+
+/// Speak through the macOS synthesiser. `say` can only write WAVE to a
+/// seekable file, so each line goes via a temp file; asking it for the output
+/// rate up front means nothing has to be resampled.
+#[cfg(target_os = "macos")]
+fn speak_say(name: Option<&str>, text: &str) -> Result<Vec<f32>> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    let wav = std::env::temp_dir().join(format!(
+        "openscrib-say-{}-{}.wav",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let spoken = (|| -> Result<Vec<f32>> {
+        let mut cmd = Command::new(SAY);
+        if let Some(name) = name {
+            cmd.arg("-v").arg(name);
+        }
+        // `-f -` reads the text from stdin, so no line can look like a flag.
+        cmd.arg("-f").arg("-");
+        cmd.arg("--file-format=WAVE").arg(format!("--data-format=LEI16@{OPUS_SAMPLE_RATE}"));
+        cmd.arg("-o").arg(&wav);
+        cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+        let mut child = cmd.spawn().with_context(|| format!("starting {SAY}"))?;
+        child.stdin.take().context("say stdin")?.write_all(text.as_bytes())?;
+        let out = child.wait_with_output()?;
+        if !out.status.success() {
+            let why = String::from_utf8_lossy(&out.stderr);
+            bail!("the system voice failed: {}", why.trim());
+        }
+        let (samples, rate) = read_wav(&std::fs::read(&wav)?)?;
+        Ok(resample(&samples, rate, OPUS_SAMPLE_RATE))
+    })();
+    let _ = std::fs::remove_file(&wav);
+    spoken
+}
+
+/// Mono samples and their rate from a 16-bit PCM WAVE file. The chunks are
+/// walked rather than assumed: `say` pads the header with a filler chunk
+/// before the samples.
+#[cfg(target_os = "macos")]
+fn read_wav(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        bail!("the system voice wrote something that isn't a WAVE file");
+    }
+    let word = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+    let mut pos = 12;
+    let mut rate = 0u32;
+    let mut channels = 1usize;
+    while pos + 8 <= bytes.len() {
+        let len = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let body = pos + 8;
+        let end = bytes.len().min(body + len);
+        match &bytes[pos..pos + 4] {
+            b"fmt " if len >= 16 => {
+                channels = word(body + 2).max(1) as usize;
+                rate = u32::from_le_bytes(bytes[body + 4..body + 8].try_into().unwrap());
+                let bits = word(body + 14);
+                if bits != 16 {
+                    bail!("expected 16-bit audio from the system voice, got {bits}-bit");
+                }
+            }
+            b"data" => {
+                let samples = bytes[body..end]
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .step_by(channels)
+                    .map(|c| i16::from_le_bytes(*c) as f32 / 32768.0)
+                    .collect();
+                if rate == 0 {
+                    bail!("the system voice wrote no format header");
+                }
+                return Ok((samples, rate));
+            }
+            _ => {}
+        }
+        // Chunks are padded to an even length.
+        pos = body + len + (len & 1);
+    }
+    bail!("the system voice wrote no audio")
+}
+
+/// Speak through Piper, which writes raw PCM at its voice's own rate.
+#[cfg(not(target_os = "macos"))]
+fn speak_piper(exe: &std::path::Path, model: &std::path::Path, text: &str) -> Result<Vec<f32>> {
+    // Piper voices state their rate in the config; 22050 is the common one.
+    let rate = std::fs::read_to_string(model.with_extension("onnx.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v["audio"]["sample_rate"].as_u64())
+        .unwrap_or(22_050) as u32;
+
+    let mut cmd = Command::new(exe);
+    cmd.arg("--model").arg(model).arg("--output_raw");
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd.spawn().with_context(|| format!("starting {}", exe.display()))?;
+    {
+        let mut stdin = child.stdin.take().context("piper stdin")?;
+        stdin.write_all(text.as_bytes())?;
+        stdin.write_all(b"\n")?;
+    }
+    let mut raw = Vec::new();
+    child.stdout.take().context("piper stdout")?.read_to_end(&mut raw)?;
+    if !child.wait()?.success() {
+        bail!("the voice engine failed");
+    }
+    let samples: Vec<f32> = raw.as_chunks::<2>().0.iter().map(|c| i16::from_le_bytes(*c) as f32 / 32768.0).collect();
+    Ok(resample(&samples, rate, OPUS_SAMPLE_RATE))
 }
 
 /// Speak every step that falls inside `segs` (the stitched clips) at its
@@ -172,6 +358,67 @@ mod tests {
         s.kind = StepKind::Shortcut;
         s.text = "Press **Ctrl+S**.".into();
         assert_eq!(spoken_text(&s), "Press Ctrl plus S.");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn lists_system_voices_without_the_novelties() {
+        let listing = "\
+Samantha            en_US    # Hello! My name is Samantha.
+Bad News            en_US    # Hello! My name is Bad News.
+Eddy (English (UK)) en_GB    # Hello! My name is Eddy.
+Majed               ar_001   # \u{645}\u{631}\u{62d}\u{628}\u{64b}\u{627}!
+nonsense
+";
+        let voices = parse_voices(listing);
+        assert_eq!(
+            voices.iter().map(|v| (v.name.as_str(), v.locale.as_str())).collect::<Vec<_>>(),
+            [("Majed", "ar_001"), ("Eddy (English (UK))", "en_GB"), ("Samantha", "en_US")]
+        );
+        // The real list from this Mac has usable voices and no novelties.
+        let real = system_voices();
+        assert!(real.iter().any(|v| v.locale.starts_with("en")), "no English voice: {real:?}");
+        assert!(!real.iter().any(|v| v.name == "Bells"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn system_voice_speaks_and_falls_back() {
+        // An unknown name leaves the user's own default in place.
+        assert!(matches!(Voice::system(Some("Nobody At All")), Voice::System { name: None }));
+        let named = system_voices().first().map(|v| v.name.clone()).expect("a voice");
+        assert!(matches!(Voice::system(Some(&named)), Voice::System { name: Some(n) } if n == named));
+
+        let pcm = Voice::system(None).speak("One. Two. Three.").expect("spoke");
+        let secs = pcm.len() as f32 / OPUS_SAMPLE_RATE as f32;
+        assert!((0.5..10.0).contains(&secs), "{secs}s of audio");
+        assert!(pcm.iter().any(|s| s.abs() > 0.01), "silence");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reads_wav_past_the_filler_chunk() {
+        let mut wav = b"RIFF\0\0\0\0WAVE".to_vec();
+        wav.extend(b"fmt ");
+        wav.extend(16u32.to_le_bytes());
+        wav.extend(1u16.to_le_bytes()); // PCM
+        wav.extend(1u16.to_le_bytes()); // mono
+        wav.extend(48_000u32.to_le_bytes());
+        wav.extend(96_000u32.to_le_bytes());
+        wav.extend(2u16.to_le_bytes());
+        wav.extend(16u16.to_le_bytes());
+        wav.extend(b"FLLR");
+        wav.extend(3u32.to_le_bytes());
+        wav.extend([0, 0, 0, 0]); // 3 bytes plus the pad byte
+        wav.extend(b"data");
+        wav.extend(4u32.to_le_bytes());
+        wav.extend(i16::MAX.to_le_bytes());
+        wav.extend(i16::MIN.to_le_bytes());
+        let (pcm, rate) = read_wav(&wav).unwrap();
+        assert_eq!(rate, 48_000);
+        assert_eq!(pcm.len(), 2);
+        assert!(pcm[0] > 0.99 && pcm[1] < -0.99, "{pcm:?}");
+        assert!(read_wav(b"not a wav at all").is_err());
     }
 
     #[test]
