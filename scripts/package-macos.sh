@@ -94,6 +94,19 @@ pick_identity() {
     [ "$found" = 1 ]
 }
 
+# Check the credentials before building: a submission that cannot authenticate
+# is worth finding out about now, not in twenty minutes.
+if [ -n "$notarize_profile" ]; then
+    if ! xcrun notarytool history --keychain-profile "$notarize_profile" > /dev/null 2>&1; then
+        echo "notarytool can't use the profile \"$notarize_profile\"." >&2
+        echo "Store it once with an app-specific password from appleid.apple.com:" >&2
+        echo "    xcrun notarytool store-credentials $notarize_profile \\" >&2
+        echo "        --apple-id <your Apple ID> --team-id NP2J294726 --password <app-specific password>" >&2
+        echo "or with an App Store Connect key: --key AuthKey_XXX.p8 --key-id XXX --issuer <uuid>" >&2
+        exit 1
+    fi
+fi
+
 if [ "$sign" = 1 ]; then
     if [ -n "${IDENTITY:-}" ]; then
         IDENTITY_NAME="$IDENTITY"
@@ -164,14 +177,33 @@ if [ "$sign" = 1 ]; then
 fi
 
 if [ -n "$notarize_profile" ]; then
-    echo "==> Notarizing (this waits for Apple)"
-    xcrun notarytool submit "$dmg" --keychain-profile "$notarize_profile" --wait
+    echo "==> Notarizing (Apple usually answers in a few minutes)"
+    # One submission is enough for both artefacts: Apple records the disk
+    # image and every signed binary inside it, and a ticket is looked up by
+    # code hash, so the .app can be stapled from the same submission.
+    reply="$(mktemp)"
+    xcrun notarytool submit "$dmg" --keychain-profile "$notarize_profile" --wait 2>&1 |
+        tee "$reply"
+    # notarytool reports a rejection in its output rather than its exit code,
+    # so read the status it printed.
+    if [ "$(sed -n 's/^ *status: *\(.*\)$/\1/p' "$reply" | tail -1)" != "Accepted" ]; then
+        id="$(sed -n 's/^ *id: *\([0-9a-f-]\{36\}\)$/\1/p' "$reply" | head -1)"
+        if [ -n "$id" ]; then
+            echo "--- Apple's notarization log ---" >&2
+            xcrun notarytool log "$id" --keychain-profile "$notarize_profile" >&2 || true
+        fi
+        echo "Notarizing failed; the log says which binary Apple objected to." >&2
+        exit 1
+    fi
+
+    # Stapling writes the ticket into the artefacts, so they pass Gatekeeper
+    # on a Mac that is offline or has never seen them.
     xcrun stapler staple "$dmg"
-    # Staple the app too, so the zip carries the ticket as well.
-    xcrun notarytool submit "$zip" --keychain-profile "$notarize_profile" --wait
     xcrun stapler staple "$app"
     rm -f "$zip"
     ditto -c -k --keepParent --sequesterRsrc "$app" "$zip"
+    xcrun stapler validate "$app"
+    # The check that matters: what another Mac will decide on first launch.
     spctl --assess --type exec --verbose=4 "$app"
 fi
 
