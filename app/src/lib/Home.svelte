@@ -26,6 +26,23 @@
     }
   })
 
+  let fetching = $state(false)
+  let fetchError = $state<string | null>(null)
+
+  async function getOpenH264() {
+    fetching = true
+    fetchError = null
+    try {
+      await api.downloadOpenH264()
+      devices = await api.listDevices()
+      video = true
+    } catch (e) {
+      fetchError = String(e)
+    } finally {
+      fetching = false
+    }
+  }
+
   async function browse() {
     const path = await openDialog({ multiple: false, filters: [{ name: 'OpenSCRIB project', extensions: ['scrib'] }] })
     if (typeof path === 'string') onopen(path)
@@ -82,7 +99,14 @@
           </select>
         {/if}
         {#if devices && !devices.video_available}
-          <p class="hint">Screen video needs <code>openh264-2.6.0-win64.dll</code> beside the app or in <code>runtime/</code>.</p>
+          <div class="setup">
+            <p class="hint">
+              Screen video uses Cisco's free OpenH264 encoder. It's downloaded once from Cisco (under 1 MB), as
+              their licence requires, and checked against their published build.
+            </p>
+            <button onclick={getOpenH264} disabled={fetching}>{fetching ? 'Downloading…' : 'Get OpenH264'}</button>
+            {#if fetchError}<p class="hint error">{fetchError}</p>{/if}
+          </div>
         {/if}
       </div>
       <button class="primary big" onclick={() => onrecord({ video, audio, monitor, mic, quality: settings.quality, stop_key: settings.stopKey })}>
@@ -203,6 +227,17 @@
     color: var(--muted);
     font-size: 12.5px;
     margin: 0;
+  }
+  .setup {
+    display: grid;
+    gap: 8px;
+    justify-items: start;
+    padding: 10px 12px;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--radius-sm);
+  }
+  .hint.error {
+    color: var(--danger);
   }
   .empty {
     color: var(--muted);

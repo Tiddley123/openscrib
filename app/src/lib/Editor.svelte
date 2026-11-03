@@ -3,6 +3,7 @@
   import { onMount } from 'svelte'
   import { open as openDialog } from '@tauri-apps/plugin-dialog'
   import { api, type Manifest, type ProcessProgress, type ProcessReport, type ProjectView, type Rect, type Step } from './api'
+  import { addRedaction, clearCrop, removeNote, setCrop } from './carry'
   import { settings } from './settings.svelte'
   import ExportDialog from './ExportDialog.svelte'
   import Inspector from './Inspector.svelte'
@@ -56,6 +57,8 @@
     const [moved] = steps.splice(from, 1)
     steps.splice(to, 0, moved)
   }
+
+  const frameSize = (s: Step) => sizeById.get(s.id) ?? null
 
   /// Window and client rects of the step's target, in frame pixels.
   function snapRects(s: Step): Rect[] {
@@ -241,6 +244,12 @@
             defaultCrop={cropById.get(step.id) ?? null}
             {highlight}
             snapRects={snapRects(step)}
+            carry={{
+              redact: (r) => addRedaction(project.manifest, index, r, settings.carryForward, frameSize),
+              crop: (r) => setCrop(project.manifest, index, r, settings.carryForward, frameSize),
+              clearCrop: () => clearCrop(project.manifest, index),
+              remove: (i) => removeNote(project.manifest, index, i),
+            }}
           />
         {/key}
       {:else}

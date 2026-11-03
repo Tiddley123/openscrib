@@ -11,7 +11,7 @@ export type Annotation =
   | { type: 'marker'; at: Point }
   | { type: 'arrow'; from: Point; to: Point }
   | { type: 'box'; rect: Rect }
-  | { type: 'blur'; rect: Rect }
+  | { type: 'blur'; rect: Rect; group?: number }
   | { type: 'sticker'; at: Point; icon: StickerIcon; size: number }
 
 export type StickerIcon = 'warning' | 'important' | 'info' | 'tip' | 'check' | 'cross' | 'question' | 'quote'
@@ -63,6 +63,7 @@ export interface Step {
   text_edited: boolean
   clip?: Clip
   crop?: Rect
+  crop_group?: number
   annotations: Annotation[]
   callout?: Callout
   hide_marker?: boolean
@@ -126,7 +127,7 @@ export interface RecordRequest {
 
 export interface ModelStatus {
   id: string
-  kind: 'whisper' | 'ocr_detection' | 'ocr_recognition' | 'vision_model' | 'vision_projector'
+  kind: 'whisper' | 'ocr_detection' | 'ocr_recognition' | 'vision_model' | 'vision_projector' | 'tts_engine' | 'tts_voice'
   label: string
   note: string
   file: string
@@ -165,6 +166,7 @@ export const api = {
     full_frame: boolean
     quality: number
     max_width: number
+    voiceover: string | null
   }) =>
     invoke<void>('export_project', { req }),
   startRecording: (req: RecordRequest) =>
@@ -178,6 +180,7 @@ export const api = {
   removeModel: (id: string) => invoke<void>('remove_model', { id }),
   processProject: (manifest: Manifest, whisper: string | null) => invoke<void>('process_project', { manifest, whisper }),
   draftText: (step: Step) => invoke<string>('draft_text', { step }),
+  downloadOpenH264: () => invoke<string>('download_openh264'),
   importImage: (path: string, stepId: number) =>
     invoke<{ rel: string; width: number; height: number }>('import_image', { path, stepId }),
 }

@@ -64,6 +64,9 @@
     }
   }
 
+  import { clearCrop, removeNote } from './carry'
+  const here = () => manifest.steps.findIndex((s) => s.id === step.id)
+
   const kinds = { click: 'Click', typed: 'Typing', shortcut: 'Shortcut', note: 'Added step' }
 
   function useText(t: string) {
@@ -203,7 +206,7 @@
     <div class="row">
       <span class="label">Notes</span>
       {#if step.annotations.length > 1}
-        <button class="ghost small" onclick={() => (step.annotations = [])}>Remove all</button>
+        <button class="ghost small" onclick={() => { for (let i = step.annotations.length - 1; i >= 0; i--) removeNote(manifest, here(), i) }}>Remove all</button>
       {/if}
     </div>
     {#if step.annotations.length === 0 && !step.crop}
@@ -214,14 +217,14 @@
           <li>
             <span class="swatch {a.type}"></span>
             <span>{noteLabels[a.type]}</span>
-            <button class="ghost small" title="Delete this note" onclick={() => step.annotations.splice(i, 1)}>✕</button>
+            <button class="ghost small" title="Delete this note (a carried redaction also goes from later steps)" onclick={() => removeNote(manifest, here(), i)}>✕</button>
           </li>
         {/each}
         {#if step.crop}
           <li>
             <span class="swatch crop"></span>
             <span>Custom crop</span>
-            <button class="ghost small" title="Go back to the default crop" onclick={() => (step.crop = undefined)}>✕</button>
+            <button class="ghost small" title="Go back to the default crop (here and on later steps it was carried to)" onclick={() => clearCrop(manifest, here())}>✕</button>
           </li>
         {/if}
       </ul>

@@ -23,8 +23,38 @@ use xcap::Monitor;
 
 use crate::media::Muxer;
 
-/// The exact Cisco build `openh264` 0.9 verifies by hash.
+/// The exact Cisco build `openh264` 0.9 verifies by hash, per platform.
+#[cfg(not(target_os = "macos"))]
 pub const OPENH264_DLL: &str = "openh264-2.6.0-win64.dll";
+#[cfg(not(target_os = "macos"))]
+const OPENH264_SHA256: &str = "2076cb5675ec6c1a4c70e7a2a322552f547b6eeed649d6dfcd9e02a543b24691";
+#[cfg(target_os = "macos")]
+pub const OPENH264_DLL: &str = "libopenh264-2.6.0-mac-arm64.dylib";
+#[cfg(target_os = "macos")]
+const OPENH264_SHA256: &str = "052e98bfcf7a9167d22f3bbb3f5988ef79065591f36af8b52924b22b13624551";
+
+/// Download Cisco's binary (as their licence requires: the user fetches
+/// Cisco's own build) into the folder next to the executable, check its hash
+/// and return its path.
+pub fn download_openh264() -> Result<PathBuf> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let url = format!("http://ciscobinary.openh264.org/{OPENH264_DLL}.bz2");
+    let resp = ureq::get(&url).call().with_context(|| format!("downloading {url}"))?;
+    let mut packed = Vec::new();
+    resp.into_body().into_reader().read_to_end(&mut packed)?;
+    let mut dll = Vec::new();
+    bzip2::read::BzDecoder::new(&packed[..]).read_to_end(&mut dll).context("unpacking OpenH264")?;
+    let hash: String = Sha256::digest(&dll).iter().map(|b| format!("{b:02x}")).collect();
+    if hash != OPENH264_SHA256 {
+        bail!("the downloaded OpenH264 doesn't match Cisco's published build (hash {hash})");
+    }
+    let dir = std::env::current_exe()?.parent().context("executable folder")?.to_path_buf();
+    let dest = dir.join(OPENH264_DLL);
+    std::fs::write(&dest, dll).with_context(|| format!("saving {}", dest.display()))?;
+    Ok(dest)
+}
 /// Keyframe at least this often while anything is changing, for seeking.
 const IDR_INTERVAL_MS: u64 = 10_000;
 

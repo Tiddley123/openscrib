@@ -11,6 +11,8 @@
   let whisper = $derived(models.filter((m) => m.kind === 'whisper'))
   let ocr = $derived(models.filter((m) => m.kind === 'ocr_detection' || m.kind === 'ocr_recognition'))
   let vision = $derived(models.filter((m) => m.kind === 'vision_model' || m.kind === 'vision_projector'))
+  let engine = $derived(models.find((m) => m.kind === 'tts_engine'))
+  let voices = $derived(models.filter((m) => m.kind === 'tts_voice'))
   let visionReady = $derived(vision.length > 0 && vision.every((m) => m.installed))
   let visionSize = $derived(vision.reduce((n, m) => n + m.size_mb, 0))
   let ocrReady = $derived(ocr.length > 0 && ocr.every((m) => m.installed))
@@ -138,6 +140,44 @@
         {#if errors[m.id]}<span class="error">{errors[m.id]}</span>{/if}
       {/each}
     </li>
+  </ul>
+</section>
+
+<section>
+  <div class="label">Voiceover (Piper)</div>
+  <p class="hint">Reads each step's text aloud in exported videos, instead of your recorded narration. Needs the engine and one voice.</p>
+  <ul>
+    {#if engine}
+      <li class:active={engine.installed}>
+        <span class="name">{engine.label}</span>
+        <span class="note">{engine.note} · {size(engine.size_mb)}</span>
+        {#if progress[engine.id] !== undefined}
+          <span class="pct">{Math.round(progress[engine.id] * 100)}%</span>
+        {:else if engine.installed}
+          <button class="ghost small" onclick={() => remove(engine!.id)}>Remove</button>
+        {:else}
+          <button class="small" onclick={() => download([engine!.id])}>Download</button>
+        {/if}
+        {#if errors[engine.id]}<span class="error">{errors[engine.id]}</span>{/if}
+      </li>
+    {/if}
+    {#each voices as m (m.id)}
+      <li class:active={settings.voice === m.id && m.installed}>
+        <label>
+          <input type="radio" name="voice" value={m.id} bind:group={settings.voice} disabled={!m.installed} />
+          <span class="name">{m.label}</span>
+          <span class="note">{m.note} · {size(m.size_mb)}</span>
+        </label>
+        {#if progress[m.id] !== undefined}
+          <span class="pct">{Math.round(progress[m.id] * 100)}%</span>
+        {:else if m.installed}
+          <button class="ghost small" onclick={() => remove(m.id)}>Remove</button>
+        {:else}
+          <button class="small" onclick={() => download([m.id])}>Download</button>
+        {/if}
+        {#if errors[m.id]}<span class="error">{errors[m.id]}</span>{/if}
+      </li>
+    {/each}
   </ul>
 </section>
 

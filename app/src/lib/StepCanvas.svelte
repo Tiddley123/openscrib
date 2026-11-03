@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { fileUrl, type Annotation, type Point, type Rect, type Step, type StickerIcon } from './api'
+  import { saveSettings, settings } from './settings.svelte'
   import { STICKERS, stickerColor } from './stickers'
 
   type Tool = 'select' | 'marker' | 'arrow' | 'box' | 'blur' | 'sticker' | 'crop'
 
-  let { step = $bindable(), workDir, size, defaultCrop, highlight, snapRects = [] }: {
+  let { step = $bindable(), workDir, size, defaultCrop, highlight, snapRects = [], carry }: {
     step: Step
     workDir: string
     size: [number, number] | null
@@ -14,6 +15,8 @@
     highlight: string
     /** Window edges (frame pixels) that crops snap to. */
     snapRects?: Rect[]
+    /** Redactions and crops go through these so they can carry to later steps. */
+    carry: { redact: (r: Rect) => void; crop: (r: Rect) => void; clearCrop: () => void; remove: (i: number) => void }
   } = $props()
 
   const tools: { id: Tool; label: string; key: string; hint: string }[] = [
@@ -164,12 +167,12 @@
     if (!big) return
     if (tool === 'arrow') step.annotations.push({ type: 'arrow', from, to })
     else if (tool === 'box') step.annotations.push({ type: 'box', rect: rectOf(from, to) })
-    else if (tool === 'blur') step.annotations.push({ type: 'blur', rect: rectOf(from, to) })
-    else if (tool === 'crop') step.crop = snapRect(rectOf(from, to))
+    else if (tool === 'blur') carry.redact(rectOf(from, to))
+    else if (tool === 'crop') carry.crop(snapRect(rectOf(from, to)))
   }
 
   function removeNote(i: number) {
-    step.annotations.splice(i, 1)
+    carry.remove(i)
     if (selected === i) selected = null
     else if (selected !== null && selected > i) selected -= 1
   }
@@ -221,10 +224,15 @@
       <button class="danger" onclick={() => selected !== null && removeNote(selected)}>Delete note</button>
     {/if}
     {#if step.crop}
-      <button class="ghost" onclick={() => (step.crop = undefined)}>Reset crop</button>
+      <button class="ghost" onclick={() => carry.clearCrop()}>Reset crop</button>
     {/if}
   </div>
 </div>
+{#if tool === 'blur' || tool === 'crop'}
+  <label class="carry" title="Also apply new redactions and crops to every later step that shows the same screen. Deleting one on a step removes it from that step onward.">
+    <input type="checkbox" bind:checked={settings.carryForward} onchange={saveSettings} /> Apply to later steps
+  </label>
+{/if}
 {#if tool === 'sticker'}
   <div class="stickers" role="radiogroup" aria-label="Sticker">
     {#each STICKERS as s}
@@ -426,6 +434,17 @@
     color: var(--ink-2);
   }
   .pre input {
+    accent-color: var(--accent);
+  }
+  .carry {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 8px 16px 0;
+    font-size: 13px;
+    color: var(--ink-2);
+  }
+  .carry input {
     accent-color: var(--accent);
   }
   .stickers {

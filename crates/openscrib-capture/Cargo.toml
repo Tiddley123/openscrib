@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+bzip2 = "0.6.1"
 cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
 image = "0.25.10"
@@ -14,7 +15,9 @@ openscrib-core = { version = "0.1.0", path = "../openscrib-core" }
 opus = "0.4.0"
 rdev = "0.5.3"
 serde_json = "1.0.154"
+sha2 = "0.11.1"
 tracing = "0.1.44"
+ureq = "3.5.1"
 xcap = "0.9.8"
 
 [target."cfg(windows)".dependencies]

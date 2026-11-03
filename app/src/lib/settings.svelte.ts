@@ -15,9 +15,13 @@ export interface Settings {
   whisperModel: string
   /** Key combination that stops a recording. */
   stopKey: string
+  /** New redactions and crops also apply to later steps of the same screen. */
+  carryForward: boolean
+  /** Piper voice used for video voiceovers. */
+  voice: string
 }
 
-export const DEFAULTS: Settings = { theme: 'system', accent: '#ff5c35', quality: 75, exportWidth: 1920, whisperModel: 'small.en', stopKey: 'Ctrl+Shift+F12' }
+export const DEFAULTS: Settings = { theme: 'system', accent: '#ff5c35', quality: 75, exportWidth: 1920, whisperModel: 'small.en', stopKey: 'Ctrl+Shift+F12', carryForward: true, voice: 'voice-en-us' }
 
 export const ACCENTS = ['#ff5c35', '#e5484d', '#f5a524', '#30a46c', '#12a594', '#0a84ff', '#6e56cf', '#d6409f', '#1c1c1e']
 

@@ -33,6 +33,14 @@ For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on it
 - [x] Editor additions: text and image steps, callout boxes (Note, Tip, Warning, Important, Quote), pictograph stickers, a draggable or hideable click marker, crop edges that snap to the window, and export folders named after the guide
 - [ ] GPU acceleration (Vulkan) for the vision model
 
+## Status: M6 (polish and release)
+
+- [x] Portable Windows release: `scriptspackage-windows.ps1` builds `distOpenSCRIB-<version>-windows-x64` (and a zip) with the app, CLI (`openscrib-cli.exe`), vision helper and app-local Visual C++ runtime
+- [x] First-run OpenH264: **Get OpenH264** on the home screen (or `openscrib setup`) downloads Cisco's build and checks its SHA-256
+- [x] Voiceover: Piper reads the step text aloud in video exports (Settings -> Models for the engine and voice, `--voiceover` in the CLI); captions follow the spoken text
+- [x] Redactions and crops carry forward to later steps of the same screen; redactions are also painted into the exported video while their step is active
+- [ ] macOS: Metal acceleration, permission onboarding, capture checks, Mac package
+
 ## Status: M4 (narration and on-screen text)
 
 - [x] Model manager: Whisper (tiny, base, small, medium, large-v3-turbo) and the OCR models, downloaded on demand into the portable `models/` folder (`openscrib models`, or Settings in the editor)

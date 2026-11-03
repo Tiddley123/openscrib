@@ -7,3 +7,4 @@ models/
 runtime/
 .cargo/config.toml
 .claude/
+dist/

@@ -55,6 +55,10 @@ enum Cmd {
         /// Scale exported video down to at most this width (0 keeps the original).
         #[arg(long, default_value_t = 1920)]
         max_width: u32,
+        /// Read the step text aloud instead of using the recorded narration
+        /// (Piper voice id, e.g. voice-en-us; see `models`).
+        #[arg(long)]
+        voiceover: Option<String>,
     },
     /// List, download or remove the optional AI models.
     Models {
@@ -68,6 +72,8 @@ enum Cmd {
         #[arg(long)]
         whisper: Option<String>,
     },
+    /// First-run setup: download Cisco's OpenH264 for screen video.
+    Setup,
     /// List monitors and microphones.
     Devices,
     /// Read a project's screen.mkv back, decode every video frame, and
@@ -145,11 +151,18 @@ fn main() -> Result<()> {
 
     match Cli::parse().cmd {
         Cmd::Record(args) => record(args),
-        Cmd::Export { project, format, out, full_frame, pdf_pages, quality, max_width } => {
-            export(&project, &format, out, full_frame, pdf_pages, quality, max_width)
+        Cmd::Export { project, format, out, full_frame, pdf_pages, quality, max_width, voiceover } => {
+            export(&project, &format, out, full_frame, pdf_pages, quality, max_width, voiceover.as_deref())
         }
         Cmd::Models { action } => models(action),
         Cmd::Process { project, whisper } => process(&project, whisper.as_deref()),
+        Cmd::Setup => {
+            match video::locate_openh264() {
+                Some(p) => info!("OpenH264 already installed: {}", p.display()),
+                None => info!("installed {}", video::download_openh264()?.display()),
+            }
+            Ok(())
+        }
         Cmd::Devices => devices(),
         Cmd::Probe { project, frame } => probe(&*load(&project)?, frame.as_deref()),
         Cmd::Info { project } => print_info(&load(&project)?.read_manifest()?),
@@ -379,6 +392,7 @@ fn probe(dir: &ProjectDir, frame_out: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // one per CLI flag
 fn export(
     project: &Path,
     formats: &[GuideFormat],
@@ -387,6 +401,7 @@ fn export(
     pdf_pages: bool,
     quality: u8,
     max_width: u32,
+    voiceover: Option<&str>,
 ) -> Result<()> {
     use openscrib_export::{CropMode, Guide, RenderOptions};
 
@@ -428,6 +443,11 @@ fn export(
                 let mut opts = openscrib_export::video::VideoExportOptions::new(dll, fmt);
                 opts.quality = quality;
                 opts.max_width = if max_width == 0 { u32::MAX } else { max_width };
+                if let Some(v) = voiceover {
+                    let (piper, model) = openscrib_process::models::tts_paths(Some(v))
+                        .context("voiceover needs Piper and a voice: openscrib models download piper && openscrib models download voice-en-us")?;
+                    opts.voiceover = Some(openscrib_export::voiceover::Voice { piper, model });
+                }
                 let started = std::time::Instant::now();
                 let mut shown = 0;
                 let stats = openscrib_export::video::export_video(&dir, &manifest, &opts, &p, |k| {

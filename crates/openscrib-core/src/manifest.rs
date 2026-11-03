@@ -158,7 +158,13 @@ pub enum Annotation {
     Marker { at: Point },
     Arrow { from: Point, to: Point },
     Box { rect: Rect },
-    Blur { rect: Rect },
+    Blur {
+        rect: Rect,
+        /// Shared by copies carried forward to later steps, so deleting one
+        /// can remove the rest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<u32>,
+    },
     /// `size` is the badge diameter in frame pixels.
     Sticker { at: Point, icon: Sticker, size: u32 },
 }
@@ -201,6 +207,9 @@ pub struct Step {
     /// export default (usually the target window).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop: Option<Rect>,
+    /// Shared by crops carried forward to later steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop_group: Option<u32>,
     #[serde(default)]
     pub annotations: Vec<Annotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,6 +239,7 @@ impl Step {
             text_edited: false,
             clip: None,
             crop: None,
+            crop_group: None,
             annotations: Vec::new(),
             callout: None,
             hide_marker: false,

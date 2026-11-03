@@ -20,7 +20,7 @@ use openscrib_core::mkv::{
 };
 use openscrib_core::mp4::Mp4Writer;
 use openscrib_core::project::{EVENTS_FILE, SCREEN_FILE};
-use openscrib_core::{Manifest, Point, ProjectDir, quality};
+use openscrib_core::{Annotation, Manifest, Point, ProjectDir, Rect, quality};
 
 use crate::render::stroke_segment;
 
@@ -45,11 +45,13 @@ pub struct VideoExportOptions {
     pub clicks: bool,
     /// 1..=100, see `openscrib_core::quality`.
     pub quality: u8,
+    /// Replace the narration with the step text read aloud.
+    pub voiceover: Option<crate::voiceover::Voice>,
 }
 
 impl VideoExportOptions {
     pub fn new(openh264: PathBuf, format: VideoFormat) -> Self {
-        Self { openh264, format, max_width: 1920, max_fps: 15, cursor: true, clicks: true, quality: quality::DEFAULT_QUALITY }
+        Self { openh264, format, max_width: 1920, max_fps: 15, cursor: true, clicks: true, quality: quality::DEFAULT_QUALITY, voiceover: None }
     }
 }
 
@@ -130,7 +132,41 @@ pub fn segments(manifest: &Manifest) -> Vec<(u64, u64)> {
 
 /// What an output frame shows: source frame, rounded cursor position, and
 /// whether a click ripple is animating. Unchanged keys are not re-encoded.
-type FrameKey = (Option<usize>, Option<(i32, i32)>, bool);
+type FrameKey = (Option<usize>, Option<(i32, i32)>, bool, usize);
+
+/// Redactions in force over time: each step's redactions apply from its
+/// click until the next step (the first step's also cover the lead-in).
+/// Only steps captured on the recorded monitor count, since redaction
+/// rectangles are in that monitor's pixels.
+struct Redactions(Vec<(u64, Vec<Rect>)>);
+
+impl Redactions {
+    fn new(manifest: &Manifest, monitor: u32) -> Self {
+        let mut by_time: Vec<(u64, Vec<Rect>)> = manifest
+            .steps
+            .iter()
+            .map(|s| {
+                let rects = if s.monitor == Some(monitor) {
+                    s.annotations
+                        .iter()
+                        .filter_map(|a| if let Annotation::Blur { rect, .. } = a { Some(*rect) } else { None })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                (s.t_ms, rects)
+            })
+            .collect();
+        by_time.sort_by_key(|(t, _)| *t);
+        Self(by_time)
+    }
+
+    /// Index of the step in force at `t` and its redactions.
+    fn at(&self, t: u64) -> (usize, &[Rect]) {
+        let i = self.0.partition_point(|(st, _)| *st <= t).saturating_sub(1);
+        (i, self.0.get(i).map_or(&[][..], |(_, r)| r.as_slice()))
+    }
+}
 
 struct Packet {
     t: u64,
@@ -230,6 +266,7 @@ pub fn export_video(
     }
     let pointer = Pointer::load(&dir.path(EVENTS_FILE))?;
     let segs = segments(manifest);
+    let redactions = Redactions::new(manifest, video_info.monitor);
 
     let (src_w, src_h) = (video_info.width, video_info.height);
     let scale = (opts.max_width as f32 / src_w as f32).min(1.0);
@@ -249,18 +286,25 @@ pub fn export_video(
         .skip_frames(false);
     let mut encoder = Encoder::with_api_config(api()?, config).context("creating encoder")?;
 
-    let audio_spec = (!audio.is_empty()).then(|| AudioSpec { channels: manifest.audio.as_ref().map_or(1, |a| a.channels) });
     // Audio packets remapped onto the output timeline, written as video
     // catches up so the file stays interleaved.
-    let mut out_audio = Vec::new();
+    let mut out_audio: Vec<(u64, Vec<u8>)> = Vec::new();
     let mut offset = 0u64;
     for &(a, b) in &segs {
         for p in audio.iter().filter(|p| p.t >= a && p.t < b) {
-            out_audio.push((offset + p.t - a, &p.data));
+            out_audio.push((offset + p.t - a, p.data.clone()));
         }
         offset += b - a;
     }
     let total_ms = offset;
+    // Voiceover replaces the recorded narration (and its captions).
+    let mut spoken_captions = None;
+    if let Some(voice) = &opts.voiceover {
+        let track = crate::voiceover::build(manifest, &segs, voice, |_| {})?;
+        out_audio = crate::voiceover::encode(&track.pcm)?.into_iter().enumerate().map(|(i, p)| (i as u64 * 20, p)).collect();
+        spoken_captions = Some(track.captions);
+    }
+    let audio_spec = (!out_audio.is_empty()).then_some(AudioSpec { channels: 1 });
     let mut audio_next = 0;
 
     let tmp_mp4 = out.with_extension("mp4.part");
@@ -312,7 +356,8 @@ pub fn export_video(
                 None
             };
             let rippling = opts.clicks && pointer.ripples(t).next().is_some();
-            let key = (cur, cursor.map(|(x, y)| (x.round() as i32, y.round() as i32)), rippling);
+            let (active, hidden) = redactions.at(t);
+            let key = (cur, cursor.map(|(x, y)| (x.round() as i32, y.round() as i32)), rippling, active);
             let changed = last_emit.as_ref() != Some(&key) || rippling;
 
             if (changed || first_in_seg)
@@ -325,6 +370,15 @@ pub fn export_video(
                 } else {
                     imageops::crop_imm(src, 0, 0, out_w, out_h).to_image()
                 };
+                for r in hidden {
+                    let scaled = Rect {
+                        x: (r.x as f32 * scale).floor() as i32,
+                        y: (r.y as f32 * scale).floor() as i32,
+                        w: (r.w as f32 * scale).ceil() as u32 + 1,
+                        h: (r.h as f32 * scale).ceil() as u32 + 1,
+                    };
+                    crate::render::redact(&mut frame, scaled);
+                }
                 if opts.clicks {
                     for (p, k) in pointer.ripples(t) {
                         let at = ((p.x - origin.x) as f32 * scale, (p.y - origin.y) as f32 * scale);
@@ -397,7 +451,7 @@ pub fn export_video(
         let _ = fs::remove_file(&tmp_mp4);
     }
     progress(1.0);
-    let captions = write_captions(out, &captions(manifest, &segs))?;
+    let captions = write_captions(out, &spoken_captions.unwrap_or_else(|| captions(manifest, &segs)))?;
     Ok(VideoExportStats { duration_ms: total_ms, frames, segments: segs.len(), width: out_w, height: out_h, captions })
 }
 
@@ -567,6 +621,26 @@ mod tests {
         // Reordered in the editor: b before a.
         m.steps = vec![b, c, a];
         assert_eq!(segments(&m), [(29_000, 60_000), (9_000, 12_000)]);
+    }
+
+    #[test]
+    fn redactions_follow_the_active_step() {
+        let mut m = Manifest::new("t");
+        let r = Rect { x: 10, y: 10, w: 50, h: 20 };
+        let mut a = Step::new(1, 5_000, StepKind::Click);
+        a.monitor = Some(7);
+        a.annotations.push(Annotation::Blur { rect: r, group: None });
+        let mut b = Step::new(2, 9_000, StepKind::Click);
+        b.monitor = Some(7);
+        let mut other = Step::new(3, 12_000, StepKind::Click);
+        other.monitor = Some(8);
+        other.annotations.push(Annotation::Blur { rect: r, group: None });
+        m.steps = vec![b, a, other];
+        let red = Redactions::new(&m, 7);
+        assert_eq!(red.at(0).1, [r]); // lead-in uses the first step
+        assert_eq!(red.at(6_000).1, [r]);
+        assert!(red.at(9_500).1.is_empty());
+        assert!(red.at(20_000).1.is_empty()); // other monitor's rects don't apply
     }
 
     #[test]

@@ -186,6 +186,9 @@ struct ExportRequest {
     quality: u8,
     /// 0 keeps the recording's own width.
     max_width: u32,
+    /// Piper voice id to read the steps aloud with, replacing the narration.
+    #[serde(default)]
+    voiceover: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -267,6 +270,11 @@ fn run_export(app: &AppHandle, dir: &ProjectDir, req: ExportRequest) -> anyhow::
                 let mut opts = VideoExportOptions::new(dll, fmt);
                 opts.quality = req.quality.clamp(1, 100);
                 opts.max_width = if req.max_width == 0 { u32::MAX } else { req.max_width };
+                if let Some(voice) = &req.voiceover {
+                    let (piper, model) = models::tts_paths(Some(voice))
+                        .ok_or_else(|| anyhow::anyhow!("voiceover needs the Piper engine and a voice (Settings -> Models)"))?;
+                    opts.voiceover = Some(openscrib_export::voiceover::Voice { piper, model });
+                }
                 export_video(dir, &manifest, &opts, &p, |k| progress(f, k))?;
                 p
             }
@@ -465,6 +473,15 @@ fn draft_text(step: openscrib_core::Step) -> String {
     step.draft_text()
 }
 
+/// Fetch Cisco's OpenH264 binary next to the app (first-run setup).
+#[tauri::command]
+async fn download_openh264() -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(|| video::download_openh264().map(|p| p.to_string_lossy().into_owned()))
+        .await
+        .map_err(err)?
+        .map_err(err)
+}
+
 #[tauri::command]
 fn default_export_dir(state: State<AppState>, title: Option<String>) -> CmdResult<String> {
     with_project(&state, |p| {
@@ -526,6 +543,7 @@ pub fn run() {
             process_project,
             draft_text,
             import_image,
+            download_openh264,
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpenSCRIB")

@@ -24,6 +24,8 @@
   // svelte-ignore state_referenced_locally
   let chosen = $state<Record<ExportFormat, boolean>>({ pdf: true, html: true, md: false, mp4: hasVideo, mkv: false })
   let fullFrame = $state(false)
+  let voiceover = $state(false)
+  let voiceReady = $state(false)
   let outDir = $state('')
   let running = $state(false)
   let progress = $state<Record<string, number>>({})
@@ -34,6 +36,13 @@
   let clipCount = $derived(manifest.steps.filter((s) => s.clip).length)
 
   onMount(() => {
+    api
+      .listModels()
+      .then((ms) => {
+        voiceReady =
+          ms.some((m) => m.kind === 'tts_engine' && m.installed) && ms.some((m) => m.kind === 'tts_voice' && m.installed)
+      })
+      .catch(() => {})
     api.defaultExportDir(manifest.title ?? null).then((d) => (outDir = d))
     const un = [
       listen<{ format: string; progress: number }>('export-progress', (e) => {
@@ -70,6 +79,7 @@
         full_frame: fullFrame,
         quality: settings.quality,
         max_width: settings.exportWidth,
+        voiceover: voiceover && voiceReady ? settings.voice : null,
       })
       // Exporting saves the project first.
       onsaved(JSON.stringify(snapshot))
@@ -109,6 +119,12 @@
         <input type="checkbox" bind:checked={fullFrame} disabled={running} />
         Show the whole screen in screenshots (instead of the clicked window)
       </label>
+      {#if selected.some((f) => f === 'mp4' || f === 'mkv')}
+        <label class="check" title={voiceReady ? 'Read each step aloud in the video, replacing your recorded narration' : 'Download the Piper engine and a voice in Settings → Models first'}>
+          <input type="checkbox" bind:checked={voiceover} disabled={running || !voiceReady} />
+          Voiceover: read the steps aloud in the video{voiceReady ? '' : ' (needs Piper in Settings → Models)'}
+        </label>
+      {/if}
       {#if selected.some((f) => f === 'mp4' || f === 'mkv')}
         <p class="note-line">
           {clipCount > 0

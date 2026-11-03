@@ -46,7 +46,7 @@ pub fn render_step(dir: &ProjectDir, manifest: &Manifest, step: &Step, opts: &Re
         .map_or(1.0, |m| m.scale);
 
     for a in &step.annotations {
-        if let Annotation::Blur { rect } = a {
+        if let Annotation::Blur { rect, .. } = a {
             redact(&mut img, *rect);
         }
     }
