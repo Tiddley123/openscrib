@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Cisco's OpenH264 is downloaded by the user at runtime and loaded with
+	     dlopen, so the hardened runtime must not insist that every library
+	     carries our signature. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<!-- Narration. macOS asks the first time a recording starts. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

@@ -14,17 +14,35 @@ pub fn monitors() -> Result<Vec<MonitorInfo>> {
 }
 
 pub(crate) fn info(m: &Monitor) -> Result<MonitorInfo> {
+    let scale = m.scale_factor().unwrap_or(1.0);
+    let rect = Rect { x: m.x()?, y: m.y()?, w: m.width()?, h: m.height()? };
     Ok(MonitorInfo {
         id: m.id()?,
         name: m.friendly_name().or_else(|_| m.name())?,
-        rect: Rect { x: m.x()?, y: m.y()?, w: m.width()?, h: m.height()? },
-        scale: m.scale_factor().unwrap_or(1.0),
+        // xcap reports macOS monitors in points but captures them in pixels.
+        // The rest of the code works in pixels, so scale the rectangle to
+        // match the frames it will be compared against.
+        rect: if cfg!(target_os = "macos") { scale_rect(rect, scale) } else { rect },
+        scale,
         primary: m.is_primary().unwrap_or(false),
     })
 }
 
-/// Capture the whole monitor containing `p`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn scale_rect(r: Rect, scale: f32) -> Rect {
+    let px = |v: i32| (v as f32 * scale).round() as i32;
+    let pu = |v: u32| (v as f32 * scale).round() as u32;
+    Rect { x: px(r.x), y: px(r.y), w: pu(r.w), h: pu(r.h) }
+}
+
+/// Capture the whole monitor containing `p` (in pixels).
 pub fn capture_at(p: Point) -> Result<(MonitorInfo, RgbaImage)> {
+    // xcap looks points up on macOS, pixels everywhere else.
+    #[cfg(target_os = "macos")]
+    let p = {
+        let (x, y) = crate::mac::to_points(p);
+        Point::new(x.round() as i32, y.round() as i32)
+    };
     let m = Monitor::from_point(p.x, p.y)
         .or_else(|_| {
             // Points on a gap between monitors: fall back to the primary.

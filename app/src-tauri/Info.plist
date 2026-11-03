@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged into the bundle's Info.plist by Tauri. Screen Recording and
+	     Accessibility have no usage-description keys; macOS writes those
+	     prompts itself. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>OpenSCRIB records your narration while you capture a guide. Nothing leaves this Mac.</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+</dict>
+</plist>

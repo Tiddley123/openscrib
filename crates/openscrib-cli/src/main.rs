@@ -444,7 +444,11 @@ fn export(
                 opts.max_width = if max_width == 0 { u32::MAX } else { max_width };
                 if let Some(v) = voiceover {
                     let (piper, model) = openscrib_process::models::tts_paths(Some(v))
-                        .context("voiceover needs Piper and a voice: openscrib models download piper && openscrib models download voice-en-us")?;
+                        .context(if cfg!(target_os = "macos") {
+                            "voiceover isn't available on macOS yet: the Piper release for Macs ships binaries that can't run"
+                        } else {
+                            "voiceover needs Piper and a voice: openscrib models download piper && openscrib models download voice-en-us"
+                        })?;
                     opts.voiceover = Some(openscrib_export::voiceover::Voice { piper, model });
                 }
                 let started = std::time::Instant::now();
@@ -561,6 +565,20 @@ fn process(project: &Path, whisper: Option<&str>) -> Result<()> {
 
 fn devices() -> Result<()> {
     openscrib_capture::platform::init_dpi_awareness();
+    let perms = openscrib_capture::permissions::status();
+    if perms.required {
+        println!("Permissions:");
+        for (name, granted, what) in [
+            ("Screen Recording", perms.screen, "screenshots, screen video and window titles"),
+            ("Accessibility", perms.input, "the click and keystroke hook"),
+        ] {
+            let mark = if granted { "granted" } else { "NOT granted" };
+            println!("  {name:<18} {mark:<12} {what}");
+        }
+        if !perms.all_granted() {
+            println!("  Grant them in System Settings -> Privacy & Security.");
+        }
+    }
     println!("Monitors:");
     for m in openscrib_capture::screen::monitors()? {
         let primary = if m.primary { " (primary)" } else { "" };
@@ -573,6 +591,20 @@ fn devices() -> Result<()> {
     match video::locate_openh264() {
         Some(p) => println!("OpenH264: {}", p.display()),
         None => println!("OpenH264: {} not found (video disabled)", video::OPENH264_DLL),
+    }
+    // Live capture checks: these come back empty when a permission is
+    // missing, which is the usual reason a recording looks blank. A window
+    // with no title means Screen Recording in particular is missing.
+    match openscrib_capture::platform::foreground_window() {
+        Some(w) => println!("Front window: \"{}\" ({}) {:?}", w.title, w.process, w.rect),
+        None => println!("Front window: none found"),
+    }
+    if let Some(at) = openscrib_capture::platform::cursor_pos() {
+        print!("Cursor: {},{}", at.x, at.y);
+        match openscrib_capture::platform::window_at(at) {
+            Some(w) => println!(" over \"{}\" ({}) {:?}", w.title, w.process, w.rect),
+            None => println!(" over no window"),
+        }
     }
     Ok(())
 }

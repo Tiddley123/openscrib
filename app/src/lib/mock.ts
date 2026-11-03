@@ -32,6 +32,9 @@ export const mockApi = {
     const m = await manifest()
     return { monitors: m.monitors, mics: [['Default microphone', true]] as [string, boolean][], video_available: true }
   },
+  async permissions() {
+    return { required: false, screen: true, input: true, note: '' }
+  },
   defaultExportDir: async () => 'C:\\exports\\sample-export',
   async listModels(): Promise<ModelStatus[]> {
     const m = (id: string, kind: ModelStatus['kind'], label: string, size_mb: number, installed: boolean) =>

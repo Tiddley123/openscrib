@@ -17,7 +17,7 @@ pub enum ModelKind {
     OcrRecognition,
     VisionModel,
     VisionProjector,
-    /// Piper text-to-speech engine (a zip unpacked into `models/piper/`).
+    /// Piper text-to-speech engine (an archive unpacked into `models/piper/`).
     TtsEngine,
     /// A Piper voice; its `.onnx.json` config is fetched alongside.
     TtsVoice,
@@ -33,6 +33,22 @@ pub struct ModelInfo {
     pub url: &'static str,
     pub size_mb: u32,
 }
+
+/// Piper ships one archive per platform, each with the binary and its
+/// libraries in a top-level `piper/` folder. Not macOS: that release's
+/// "aarch64" archive holds x86_64 binaries, unsigned, without the libraries
+/// they link, so nothing in it can run. Voiceover waits for a macOS voice.
+#[cfg(windows)]
+const PIPER_FILE: &str = "piper/piper.exe";
+#[cfg(all(unix, not(target_os = "macos")))]
+const PIPER_FILE: &str = "piper/piper";
+
+#[cfg(windows)]
+const PIPER_URL: &str = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip";
+#[cfg(all(unix, not(target_os = "macos"), target_arch = "aarch64"))]
+const PIPER_URL: &str = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz";
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "aarch64")))]
+const PIPER_URL: &str = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz";
 
 #[cfg(test)]
 const WHISPER_BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
@@ -105,15 +121,17 @@ pub const CATALOG: &[ModelInfo] = &[
         url: "https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf",
         size_mb: 845,
     },
+    #[cfg(not(target_os = "macos"))]
     ModelInfo {
         id: "piper",
         kind: ModelKind::TtsEngine,
         label: "Piper voice engine",
         note: "Reads step text aloud for video voiceovers",
-        file: "piper/piper.exe",
-        url: "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip",
+        file: PIPER_FILE,
+        url: PIPER_URL,
         size_mb: 22,
     },
+    #[cfg(not(target_os = "macos"))]
     ModelInfo {
         id: "voice-en-us",
         kind: ModelKind::TtsVoice,
@@ -123,6 +141,7 @@ pub const CATALOG: &[ModelInfo] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
         size_mb: 63,
     },
+    #[cfg(not(target_os = "macos"))]
     ModelInfo {
         id: "voice-en-gb",
         kind: ModelKind::TtsVoice,
@@ -235,26 +254,11 @@ pub fn download(m: &ModelInfo, mut progress: impl FnMut(u64, Option<u64>)) -> Re
         let _ = fs::remove_file(&part);
         bail!("download incomplete: got {done} of {t} bytes");
     }
-    if m.url.ends_with(".zip") {
-        // Unpack next to where `file` should end up, flattening the zip's top folder.
+    if is_archive(m.url) {
+        // Unpack next to where `file` should end up, flattening the archive's
+        // top folder.
         let target = dest.parent().context("unpack folder")?.to_path_buf();
-        let mut zip = zip::ZipArchive::new(File::open(&part)?)?;
-        for i in 0..zip.len() {
-            let mut entry = zip.by_index(i)?;
-            let Some(name) = entry.enclosed_name() else { continue };
-            let rel: PathBuf = name.components().skip(1).collect();
-            if rel.as_os_str().is_empty() {
-                continue;
-            }
-            let out = target.join(rel);
-            if entry.is_dir() {
-                fs::create_dir_all(&out)?;
-            } else {
-                fs::create_dir_all(out.parent().context("entry folder")?)?;
-                io::copy(&mut entry, &mut File::create(&out)?)?;
-            }
-        }
-        drop(zip);
+        unpack(&part, &target, m.url)?;
         let _ = fs::remove_file(&part);
         if !dest.is_file() {
             bail!("{} was not in the download", m.file);
@@ -270,6 +274,53 @@ pub fn download(m: &ModelInfo, mut progress: impl FnMut(u64, Option<u64>)) -> Re
         fs::write(dest.with_extension("onnx.json"), json)?;
     }
     Ok(dest)
+}
+
+fn is_archive(url: &str) -> bool {
+    url.ends_with(".zip") || url.ends_with(".tar.gz")
+}
+
+/// Unpack `archive` into `target`, dropping the single top-level folder every
+/// Piper release wraps its files in. Tar entries keep their permissions, so
+/// the binary stays executable.
+fn unpack(archive: &Path, target: &Path, url: &str) -> Result<()> {
+    let file = File::open(archive)?;
+    if url.ends_with(".tar.gz") {
+        let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+        for entry in tar.entries()? {
+            let mut entry = entry?;
+            let path = entry.path()?.into_owned();
+            let rel: PathBuf = path.components().skip(1).collect();
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
+            let out = target.join(rel);
+            if entry.header().entry_type().is_dir() {
+                fs::create_dir_all(&out)?;
+            } else {
+                fs::create_dir_all(out.parent().context("entry folder")?)?;
+                entry.unpack(&out)?;
+            }
+        }
+        return Ok(());
+    }
+    let mut zip = zip::ZipArchive::new(file)?;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i)?;
+        let Some(name) = entry.enclosed_name() else { continue };
+        let rel: PathBuf = name.components().skip(1).collect();
+        if rel.as_os_str().is_empty() {
+            continue;
+        }
+        let out = target.join(rel);
+        if entry.is_dir() {
+            fs::create_dir_all(&out)?;
+        } else {
+            fs::create_dir_all(out.parent().context("entry folder")?)?;
+            io::copy(&mut entry, &mut File::create(&out)?)?;
+        }
+    }
+    Ok(())
 }
 
 /// Piper and the chosen (or first installed) voice, if both are present.
@@ -308,7 +359,7 @@ mod tests {
     #[test]
     fn catalogue_is_consistent() {
         for m in CATALOG {
-            assert!(m.url.ends_with(".zip") || m.url.ends_with(m.file), "{} url/file mismatch", m.id);
+            assert!(is_archive(m.url) || m.url.ends_with(m.file), "{} url/file mismatch", m.id);
             if m.kind == ModelKind::Whisper {
                 assert!(m.url.starts_with(WHISPER_BASE));
             } else if matches!(m.kind, ModelKind::OcrDetection | ModelKind::OcrRecognition) && !m.url.contains("piper") {

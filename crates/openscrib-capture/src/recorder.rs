@@ -268,6 +268,11 @@ fn unsubscribe_input() {
 fn convert(e: rdev::Event) -> Option<Input> {
     use rdev::EventType as E;
     Some(match e.event_type {
+        // rdev reports macOS positions in points; the steps, frames and
+        // monitors above all work in pixels.
+        #[cfg(target_os = "macos")]
+        E::MouseMove { x, y } => Input::Move(crate::mac::to_pixels(x, y)),
+        #[cfg(not(target_os = "macos"))]
         E::MouseMove { x, y } => Input::Move(Point::new(x.round() as i32, y.round() as i32)),
         E::ButtonPress(b) => Input::Press(button(b)),
         E::ButtonRelease(b) => Input::Release(button(b)),

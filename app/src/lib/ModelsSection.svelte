@@ -144,8 +144,11 @@
 </section>
 
 <section>
-  <div class="label">Voiceover (Piper)</div>
+  <div class="label">Voiceover</div>
   <p class="hint">Reads each step's text aloud in exported videos, instead of your recorded narration. Needs the engine and one voice.</p>
+  {#if !engine}
+    <p class="hint">Not available on macOS yet: the Piper release for Macs ships binaries that can't run. Exported videos keep your recorded narration.</p>
+  {/if}
   <ul>
     {#if engine}
       <li class:active={engine.installed}>

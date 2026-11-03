@@ -116,6 +116,14 @@ export interface Devices {
   video_available: boolean
 }
 
+/// What the OS has granted. `required` is false off macOS.
+export interface Permissions {
+  required: boolean
+  screen: boolean
+  input: boolean
+  note: string
+}
+
 export interface RecordRequest {
   video: boolean
   audio: boolean
@@ -181,6 +189,12 @@ export const api = {
   processProject: (manifest: Manifest, whisper: string | null) => invoke<void>('process_project', { manifest, whisper }),
   draftText: (step: Step) => invoke<string>('draft_text', { step }),
   downloadOpenH264: () => invoke<string>('download_openh264'),
+  permissions: () =>
+    dev ? mockApi.permissions() : invoke<Permissions>('permissions'),
+  requestPermission: (which: 'screen' | 'input') =>
+    invoke<Permissions>('request_permission', { which }),
+  openPermissionSettings: (which: 'screen' | 'input') =>
+    invoke<void>('open_permission_settings', { which }),
   importImage: (path: string, stepId: number) =>
     invoke<{ rel: string; width: number; height: number }>('import_image', { path, stepId }),
 }

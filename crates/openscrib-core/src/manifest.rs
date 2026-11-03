@@ -453,6 +453,13 @@ pub fn target_phrase(label: &str) -> String {
     format!("**{label}**")
 }
 
+/// The OS shell's own strip of app buttons: the Windows taskbar (a window
+/// owned by Explorer) or the macOS Dock. A click there says nothing on its
+/// own, so step text is named after the app it opens instead.
+pub fn is_shell_bar(process: &str) -> bool {
+    process.eq_ignore_ascii_case("explorer.exe") || process.eq_ignore_ascii_case("Dock")
+}
+
 /// Window titles of remote-desktop viewers describe the connection, not
 /// what was clicked, so they make poor step text.
 pub fn is_remote_viewer(process: &str) -> bool {

@@ -120,9 +120,9 @@
         Show the whole screen in screenshots (instead of the clicked window)
       </label>
       {#if selected.some((f) => f === 'mp4' || f === 'mkv')}
-        <label class="check" title={voiceReady ? 'Read each step aloud in the video, replacing your recorded narration' : 'Download the Piper engine and a voice in Settings → Models first'}>
+        <label class="check" title={voiceReady ? 'Read each step aloud in the video, replacing your recorded narration' : 'Install a voice engine in Settings → Models first'}>
           <input type="checkbox" bind:checked={voiceover} disabled={running || !voiceReady} />
-          Voiceover: read the steps aloud in the video{voiceReady ? '' : ' (needs Piper in Settings → Models)'}
+          Voiceover: read the steps aloud in the video{voiceReady ? '' : ' (needs a voice in Settings → Models)'}
         </label>
       {/if}
       {#if selected.some((f) => f === 'mp4' || f === 'mkv')}

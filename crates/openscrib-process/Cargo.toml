@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+flate2 = "1.1.10"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 matroska-demuxer = "0.8.1"
 ocrs = "0.13.1"
@@ -15,10 +16,16 @@ opus = "0.4.0"
 rten = "0.26"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+tar = "0.4.44"
 tracing = "0.1.44"
 ureq = "3.5.1"
 whisper-rs = { version = "0.16.0", features = ["tracing_backend"] }
 zip = "9.3.0"
+
+# whisper.cpp needs asking; it embeds its Metal shader library, so the build
+# stays self-contained.
+[target."cfg(target_os = \"macos\")".dependencies]
+whisper-rs = { version = "0.16.0", features = ["metal"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

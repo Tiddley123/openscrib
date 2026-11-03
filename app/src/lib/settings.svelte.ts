@@ -21,7 +21,11 @@ export interface Settings {
   voice: string
 }
 
-export const DEFAULTS: Settings = { theme: 'system', accent: '#ff5c35', quality: 75, exportWidth: 1920, whisperModel: 'small.en', stopKey: 'Ctrl+Shift+F12', carryForward: true, voice: 'voice-en-us' }
+// A Mac laptop's F12 is Volume Up, and that press never reaches the recorder,
+// so stop on Escape there. The Settings dialog can change it either way.
+const mac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)
+
+export const DEFAULTS: Settings = { theme: 'system', accent: '#ff5c35', quality: 75, exportWidth: 1920, whisperModel: 'small.en', stopKey: mac ? 'Ctrl+Shift+Esc' : 'Ctrl+Shift+F12', carryForward: true, voice: 'voice-en-us' }
 
 export const ACCENTS = ['#ff5c35', '#e5484d', '#f5a524', '#30a46c', '#12a594', '#0a84ff', '#6e56cf', '#d6409f', '#1c1c1e']
 

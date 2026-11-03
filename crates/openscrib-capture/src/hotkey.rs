@@ -14,10 +14,20 @@ pub struct Hotkey {
 }
 
 impl Default for Hotkey {
+    /// Ctrl+Shift+F12, except on macOS: a laptop's F12 is Volume Up unless
+    /// the user has turned the media keys off, and the key press never
+    /// reaches an event tap. Escape always does.
     fn default() -> Self {
-        Self { ctrl: true, alt: false, shift: true, win: false, key: Key::F12 }
+        let key = if cfg!(target_os = "macos") { Key::Escape } else { Key::F12 };
+        Self { ctrl: true, alt: false, shift: true, win: false, key }
     }
 }
+
+/// What the fourth modifier is called here.
+#[cfg(target_os = "macos")]
+const META: &str = "Cmd";
+#[cfg(not(target_os = "macos"))]
+const META: &str = "Win";
 
 const NAMED: &[(&str, Key)] = &[
     ("F1", Key::F1),
@@ -114,7 +124,7 @@ impl Hotkey {
 
 impl fmt::Display for Hotkey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (on, name) in [(self.ctrl, "Ctrl"), (self.alt, "Alt"), (self.shift, "Shift"), (self.win, "Win")] {
+        for (on, name) in [(self.ctrl, "Ctrl"), (self.alt, "Alt"), (self.shift, "Shift"), (self.win, META)] {
             if on {
                 write!(f, "{name}+")?;
             }
@@ -130,16 +140,21 @@ mod tests {
 
     #[test]
     fn parses_and_prints() {
-        assert_eq!(Hotkey::parse("Ctrl+Shift+F12"), Some(Hotkey::default()));
+        assert_eq!(Hotkey::parse(&Hotkey::default().to_string()), Some(Hotkey::default()));
+        assert_eq!(Hotkey::parse("Ctrl+Shift+F12").unwrap().key, Key::F12);
         let p = Hotkey::parse("pause").unwrap();
         assert_eq!(p.key, Key::Pause);
-        assert_eq!(Hotkey::parse("Alt+Win+s").unwrap().to_string(), "Alt+Win+S");
+        // "Win", "Cmd", "Meta" and "Super" all parse; the label follows the
+        // platform.
+        assert_eq!(Hotkey::parse("Alt+Cmd+s").unwrap().to_string(), format!("Alt+{META}+S"));
         // Plain letters or Shift+letter would fire while typing.
         assert_eq!(Hotkey::parse("S"), None);
         assert_eq!(Hotkey::parse("Shift+S"), None);
         assert_eq!(Hotkey::parse("Ctrl+S+T"), None);
         assert_eq!(Hotkey::parse("Ctrl+Banana"), None);
-        assert!(Hotkey::default().matches(Key::F12, true, false, true, false));
-        assert!(!Hotkey::default().matches(Key::F12, true, true, true, false));
+        // Ctrl+Shift and the platform's own default key, nothing more.
+        let d = Hotkey::default();
+        assert!(d.matches(d.key, true, false, true, false));
+        assert!(!d.matches(d.key, true, true, true, false));
     }
 }

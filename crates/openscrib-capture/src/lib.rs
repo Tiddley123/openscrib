@@ -4,7 +4,10 @@
 
 pub mod audio;
 pub mod hotkey;
+#[cfg(target_os = "macos")]
+pub mod mac;
 pub mod media;
+pub mod permissions;
 pub mod platform;
 pub mod recorder;
 pub mod screen;

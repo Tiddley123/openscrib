@@ -224,10 +224,12 @@ fn name_from_context(manifest: &mut Manifest) {
     for (n, &i) in order.iter().enumerate() {
         let next_app = order.get(n + 1).map(|&j| &manifest.steps[j]).filter(|next| {
             next.t_ms <= manifest.steps[i].t_ms + 20_000
-        }).and_then(|next| next.window.as_ref()).filter(|w| !w.process.eq_ignore_ascii_case("explorer.exe")).map(app_name);
+        }).and_then(|next| next.window.as_ref()).filter(|w| !openscrib_core::is_shell_bar(&w.process)).map(app_name);
         let step = &mut manifest.steps[i];
         let Some(win) = &step.window else { continue };
-        let on_taskbar = win.process.eq_ignore_ascii_case("explorer.exe") && win.rect.h <= 120 && win.rect.w >= 400;
+        // A bar-shaped shell window, in pixels: the taskbar or the Dock at any
+        // display scale, never an ordinary Explorer or Finder window.
+        let on_taskbar = openscrib_core::is_shell_bar(&win.process) && win.rect.h <= 200 && win.rect.w >= 400;
         if step.kind == StepKind::Click && on_taskbar && let Some(app) = next_app.filter(|a| !a.is_empty()) {
             step.vision = Some(app);
             continue;

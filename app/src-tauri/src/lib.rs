@@ -269,7 +269,13 @@ fn run_export(app: &AppHandle, dir: &ProjectDir, req: ExportRequest) -> anyhow::
                 opts.max_width = if req.max_width == 0 { u32::MAX } else { req.max_width };
                 if let Some(voice) = &req.voiceover {
                     let (piper, model) = models::tts_paths(Some(voice))
-                        .ok_or_else(|| anyhow::anyhow!("voiceover needs the Piper engine and a voice (Settings -> Models)"))?;
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(if cfg!(target_os = "macos") {
+                                "voiceover isn't available on macOS yet"
+                            } else {
+                                "voiceover needs the Piper engine and a voice (Settings -> Models)"
+                            })
+                        })?;
                     opts.voiceover = Some(openscrib_export::voiceover::Voice { piper, model });
                 }
                 export_video(dir, &manifest, &opts, &p, |k| progress(f, k))?;
@@ -310,6 +316,20 @@ fn start_recording(app: AppHandle, state: State<AppState>, req: RecordRequest) -
     let work = out.with_extension(format!("{PROJECT_EXT}.recording"));
     let dir = ProjectDir::create(&work).map_err(err)?;
 
+    let perms = openscrib_capture::permissions::status();
+    if !perms.all_granted() {
+        let missing = [("Screen Recording", perms.screen), ("Accessibility", perms.input)]
+            .into_iter()
+            .filter(|(_, granted)| !granted)
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>()
+            .join(" and ");
+        return Err(format!(
+            "{missing} is not granted, so the recording would capture nothing. \
+             Grant it on the home screen, then record again."
+        ));
+    }
+
     let mut media = MediaConfig::default();
     if req.video
         && let Some(openh264) = video::locate_openh264()
@@ -319,9 +339,10 @@ fn start_recording(app: AppHandle, state: State<AppState>, req: RecordRequest) -
     if req.audio {
         media.audio = Some(AudioConfig { device: req.mic });
     }
-    let own_exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+    // Inside OpenSCRIB.app the executable is "openscrib-app" but macOS names
+    // the window's owner after the bundle, so ask for the name the window
+    // lists use.
+    let own_exe = openscrib_core::paths::process_name();
     let stop_key = req.stop_key.as_deref().and_then(openscrib_capture::Hotkey::parse).unwrap_or_default();
     let cfg = SessionConfig { capture_keys: true, ignore_process: own_exe, stop_key };
 
@@ -470,6 +491,55 @@ fn draft_text(step: openscrib_core::Step) -> String {
     step.draft_text()
 }
 
+#[derive(Serialize)]
+struct PermissionStatus {
+    /// False where the OS gates nothing, so the home screen stays quiet.
+    required: bool,
+    screen: bool,
+    input: bool,
+    note: &'static str,
+}
+
+fn permission_status() -> PermissionStatus {
+    let p = openscrib_capture::permissions::status();
+    PermissionStatus {
+        required: p.required,
+        screen: p.screen,
+        input: p.input,
+        note: openscrib_capture::permissions::RESTART_NOTE,
+    }
+}
+
+/// What the OS has granted: on macOS, Screen Recording and Accessibility.
+#[tauri::command]
+fn permissions() -> PermissionStatus {
+    permission_status()
+}
+
+/// Ask the OS for one permission. macOS only prompts the first time a build
+/// asks, so the home screen also offers `open_permission_settings`.
+#[tauri::command]
+fn request_permission(which: String) -> CmdResult<PermissionStatus> {
+    use openscrib_capture::permissions;
+    match which.as_str() {
+        "screen" => permissions::request_screen(),
+        "input" => permissions::request_input(),
+        other => return Err(format!("unknown permission \"{other}\"")),
+    };
+    Ok(permission_status())
+}
+
+#[tauri::command]
+fn open_permission_settings(which: String) -> CmdResult<()> {
+    use openscrib_capture::permissions;
+    match which.as_str() {
+        "screen" => permissions::open_screen_settings(),
+        "input" => permissions::open_input_settings(),
+        other => return Err(format!("unknown permission \"{other}\"")),
+    }
+    Ok(())
+}
+
 /// Fetch Cisco's OpenH264 binary next to the app (first-run setup).
 #[tauri::command]
 async fn download_openh264() -> CmdResult<String> {
@@ -541,6 +611,9 @@ pub fn run() {
             draft_text,
             import_image,
             download_openh264,
+            permissions,
+            request_permission,
+            open_permission_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpenSCRIB")

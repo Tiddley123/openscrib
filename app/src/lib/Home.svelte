@@ -1,7 +1,7 @@
 <script lang="ts">
   import { open as openDialog } from '@tauri-apps/plugin-dialog'
   import { onMount } from 'svelte'
-  import { api, formatTime, type Devices, type RecentItem, type RecordRequest } from './api'
+  import { api, formatTime, type Devices, type Permissions, type RecentItem, type RecordRequest } from './api'
   import { settings } from './settings.svelte'
 
   let { onopen, onrecord, onsettings }: {
@@ -17,8 +17,24 @@
   let monitor = $state<number | null>(null)
   let mic = $state<string | null>(null)
 
+  let perms = $state<Permissions | null>(null)
+
+  const missing = $derived(
+    perms?.required ? ([['screen', perms.screen], ['input', perms.input]] as const).filter(([, ok]) => !ok).map(([k]) => k) : [],
+  )
+
+  const PERMISSION = {
+    screen: { label: 'Screen Recording', what: 'screenshots, screen video and window titles' },
+    input: { label: 'Accessibility', what: 'the clicks and keystrokes that become steps' },
+  } as const
+
+  async function allow(which: 'screen' | 'input') {
+    perms = await api.requestPermission(which).catch(() => perms)
+  }
+
   onMount(async () => {
     recents = await api.listRecordings().catch(() => [])
+    perms = await api.permissions().catch(() => null)
     devices = await api.listDevices().catch(() => null)
     if (devices) {
       monitor = devices.monitors.find((m) => m.primary)?.id ?? devices.monitors[0]?.id ?? null
@@ -42,6 +58,17 @@
       fetching = false
     }
   }
+
+  onMount(() => {
+    // Permissions are granted in System Settings, so re-check whenever the
+    // window comes back.
+    const recheck = async () => {
+      perms = await api.permissions().catch(() => perms)
+      devices = await api.listDevices().catch(() => devices)
+    }
+    window.addEventListener('focus', recheck)
+    return () => window.removeEventListener('focus', recheck)
+  })
 
   async function browse() {
     const path = await openDialog({ multiple: false, filters: [{ name: 'OpenSCRIB project', extensions: ['scrib'] }] })
@@ -98,6 +125,19 @@
             {/each}
           </select>
         {/if}
+        {#if missing.length > 0}
+          <div class="setup">
+            <p class="hint">macOS keeps a recorder out until you let it in. OpenSCRIB still needs:</p>
+            {#each missing as k (k)}
+              <div class="perm">
+                <span class="hint"><strong>{PERMISSION[k].label}</strong> — {PERMISSION[k].what}</span>
+                <button onclick={() => allow(k)}>Allow</button>
+                <button class="ghost" onclick={() => api.openPermissionSettings(k)}>System Settings</button>
+              </div>
+            {/each}
+            <p class="hint">{perms?.note}</p>
+          </div>
+        {/if}
         {#if devices && !devices.video_available}
           <div class="setup">
             <p class="hint">
@@ -109,7 +149,7 @@
           </div>
         {/if}
       </div>
-      <button class="primary big" onclick={() => onrecord({ video, audio, monitor, mic, quality: settings.quality, stop_key: settings.stopKey })}>
+      <button class="primary big" disabled={missing.length > 0} onclick={() => onrecord({ video, audio, monitor, mic, quality: settings.quality, stop_key: settings.stopKey })}>
         <span class="rec"></span> Start recording
       </button>
       <p class="hint">The window minimises while you record. Stop with {#each settings.stopKey.split("+") as k, i}{#if i}+{/if}<kbd>{k}</kbd>{/each}.</p>
@@ -227,6 +267,12 @@
     color: var(--muted);
     font-size: 12.5px;
     margin: 0;
+  }
+  .perm {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
   }
   .setup {
     display: grid;

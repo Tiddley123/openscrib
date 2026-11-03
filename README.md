@@ -37,9 +37,11 @@ For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on it
 
 - [x] Portable Windows release: `scriptspackage-windows.ps1` builds `distOpenSCRIB-<version>-windows-x64` (and a zip) with the app, CLI (`openscrib-cli.exe`), vision helper and app-local Visual C++ runtime
 - [x] First-run OpenH264: **Get OpenH264** on the home screen (or `openscrib setup`) downloads Cisco's build and checks its SHA-256
-- [x] Voiceover: Piper reads the step text aloud in video exports (Settings -> Models for the engine and voice, `--voiceover` in the CLI); captions follow the spoken text
+- [x] Voiceover: Piper reads the step text aloud in video exports (Settings -> Models for the engine and voice, `--voiceover` in the CLI); captions follow the spoken text. Not on macOS: Piper's Mac release ships x86_64 binaries labelled aarch64, unsigned and without the libraries they link, so the engine is left out of the catalogue there
 - [x] Redactions and crops carry forward to later steps of the same screen; redactions are also painted into the exported video while their step is active
-- [ ] macOS: Metal acceleration, permission onboarding, capture checks, Mac package
+- [x] macOS release: `scripts/package-macos.sh` builds, Developer ID signs and packages `OpenSCRIB.app` (with the CLI and vision helper inside it) as a .dmg and a .zip; `--notarize <profile>` submits it to Apple and staples the ticket
+- [x] macOS capture: window and Dock lookups through CoreGraphics, points converted to pixels at the boundary, Metal for Whisper and the vision model, Screen Recording and Accessibility onboarding on the home screen, and capture checks in `openscrib devices`
+- [ ] macOS: a notarized public build (needs App Store Connect credentials)
 
 ## Status: M4 (narration and on-screen text)
 
@@ -48,6 +50,31 @@ For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on it
 - [x] OCR (pure-Rust `ocrs`) reads the label under each click, and any tooltip that appeared before it
 - [x] Step text drafted from these, with no language model: "Click **This PC**." instead of "Click in **…Remote Desktop…**". Text you've edited is never overwritten
 - [x] Icons with no text are handled by the M5 vision model
+
+### Building on macOS
+
+Needs Xcode (or the Command Line Tools) for `clang` and the frameworks, and
+CMake for whisper.cpp and llama.cpp. Both build their Metal backend with the
+shaders embedded, so the bundle stays self-contained.
+
+```bash
+scripts/package-macos.sh            # dist/OpenSCRIB-<version>-macos-arm64.{dmg,zip}
+scripts/package-macos.sh --no-sign  # a quick unsigned build
+```
+
+macOS gates what a recorder needs, and fails quietly when it is missing:
+without **Screen Recording** every frame is blank and window titles are
+empty, and without **Accessibility** the input hook never sees a click. The
+home screen asks for both, `openscrib devices` reports them next to the
+monitors and the window under the cursor, and a recording refuses to start
+without them. macOS reopens the app when either is granted.
+
+Coordinates differ too. macOS reports windows, clicks and the cursor in
+points but captures in pixels, so `openscrib-capture`'s `mac` module converts
+to pixels at the boundary and everything above it works as it does on
+Windows. The app writes nothing inside its own bundle: recordings go to
+`~/Documents/OpenSCRIB`, models and OpenH264 to
+`~/Library/Application Support/OpenSCRIB`.
 
 ### Building with Whisper on Windows
 

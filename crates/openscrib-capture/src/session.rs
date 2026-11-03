@@ -698,7 +698,9 @@ mod tests {
             ev(200, Input::KeyUp(Key::ControlLeft)),
             key(300, Key::ControlLeft, ""),
             key(310, Key::ShiftLeft, ""),
-            key(320, Key::F12, ""),
+            // The stop key itself, whatever this platform defaults to: it
+            // ends the recording instead of becoming a step.
+            key(320, SessionConfig::default().stop_key.key, ""),
         ]);
         let kinds: Vec<_> = m.steps.iter().map(|s| (s.kind, s.keys.clone().unwrap())).collect();
         assert_eq!(kinds, [(StepKind::Typed, "a".into()), (StepKind::Shortcut, "Ctrl+S".into())]);

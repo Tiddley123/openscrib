@@ -6,7 +6,31 @@ use openscrib_core::{Point, WindowInfo};
 #[cfg(windows)]
 pub use self::windows_impl::*;
 
-#[cfg(not(windows))]
+/// macOS needs no DPI call of its own: points become pixels in `crate::mac`,
+/// which every lookup there already does.
+#[cfg(target_os = "macos")]
+mod mac_impl {
+    use super::*;
+
+    pub fn init_dpi_awareness() {}
+
+    pub fn window_at(p: Point) -> Option<WindowInfo> {
+        crate::mac::window_at(p)
+    }
+
+    pub fn foreground_window() -> Option<WindowInfo> {
+        crate::mac::foreground_window()
+    }
+
+    pub fn cursor_pos() -> Option<Point> {
+        crate::mac::cursor_pos()
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use self::mac_impl::*;
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod fallback {
     use super::*;
 
@@ -25,7 +49,7 @@ mod fallback {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub use self::fallback::*;
 
 #[cfg(windows)]
