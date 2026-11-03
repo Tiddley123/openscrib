@@ -52,92 +52,78 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Every Developer ID certificate for a team carries the same common name, so a
+# replacement sits in the keychain beside its predecessor and only the SHA-1
+# hash tells them apart. Choose by hash, and prefer a certificate from the G2
+# sub-CA: the previous sub-CA expires on 1 Feb 2027 and caps everything it
+# issued to that date, whatever the certificate itself says.
+#
+# Sets IDENTITY (the hash codesign is given), IDENTITY_NAME, IDENTITY_SUBCA and
+# IDENTITY_DAYS.
+pick_identity() {
+    local held dir pem fp issuer end g2 best_end=0 best_g2=-1 found=0
+    held="$(security find-identity -v -p codesigning |
+        sed -n 's/^ *[0-9]*) \([0-9A-F]\{40\}\) "Developer ID Application:.*/\1/p')"
+    [ -n "$held" ] || return 1
+
+    dir="$(mktemp -d)"
+    security find-certificate -a -c "Developer ID Application" -p 2> /dev/null |
+        awk -v d="$dir" '/BEGIN CERTIFICATE/ { n++ } n { print > (d "/" n ".pem") }'
+    for pem in "$dir"/*.pem; do
+        [ -f "$pem" ] || continue
+        fp="$(openssl x509 -in "$pem" -noout -fingerprint -sha1 2> /dev/null |
+            cut -d= -f2 | tr -d ':')"
+        # Only a certificate whose private key is on this machine can sign.
+        case "$held" in *"$fp"*) ;; *) continue ;; esac
+        issuer="$(openssl x509 -in "$pem" -noout -issuer)"
+        case "$issuer" in *OU=G2*) g2=1 ;; *) g2=0 ;; esac
+        end="$(date -j -f "%b %e %T %Y %Z" \
+            "$(openssl x509 -in "$pem" -noout -enddate | cut -d= -f2)" +%s 2> /dev/null || echo 0)"
+        if [ "$g2" -gt "$best_g2" ] || { [ "$g2" = "$best_g2" ] && [ "$end" -gt "$best_end" ]; }; then
+            IDENTITY="$fp"
+            IDENTITY_NAME="$(openssl x509 -in "$pem" -noout -subject |
+                sed -n 's/.*CN=\(Developer ID Application: [^/]*\).*/\1/p')"
+            IDENTITY_SUBCA="$([ "$g2" = 1 ] && echo G2 || echo "previous (expires 1 Feb 2027)")"
+            IDENTITY_DAYS=$(( (end - $(date +%s)) / 86400 ))
+            best_end="$end"
+            best_g2="$g2"
+            found=1
+        fi
+    done
+    rm -rf "$dir"
+    [ "$found" = 1 ]
+}
+
 if [ "$sign" = 1 ]; then
-    identities="$(security find-identity -v -p codesigning |
-        sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p')"
-    count="$(printf '%s' "$identities" | grep -c . || true)"
-    if [ -z "${IDENTITY:-}" ]; then
-        if [ "$count" = 0 ]; then
-            echo "No Developer ID Application identity in the keychain." >&2
-            echo "Install one, pass IDENTITY=..., or run with --no-sign." >&2
-            exit 1
-        fi
-        # Apple's legacy Developer ID intermediate expires 1 Feb 2027 and caps
-        # every certificate it issued to that date, so replacing one leaves two
-        # in the keychain. Never guess which to ship with.
-        if [ "$count" -gt 1 ]; then
-            echo "More than one Developer ID Application identity; pass IDENTITY=..." >&2
-            echo "$identities" | sed 's/^/    /' >&2
-            exit 1
-        fi
-        IDENTITY="$identities"
+    if [ -n "${IDENTITY:-}" ]; then
+        IDENTITY_NAME="$IDENTITY"
+        IDENTITY_SUBCA="as given"
+        IDENTITY_DAYS=""
+    elif ! pick_identity; then
+        echo "No Developer ID Application identity in this keychain." >&2
+        echo "Install one, pass IDENTITY=<name or hash>, or run with --no-sign." >&2
+        exit 1
     fi
 
-    # A timestamped signature outlives its certificate, but nothing can be
-    # signed with an expired one, so say how long is left.
-    expiry="$(security find-certificate -c "$IDENTITY" -p 2>/dev/null |
-        openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)"
-    if [ -n "$expiry" ]; then
-        left=$(( ($(date -j -f "%b %e %T %Y %Z" "$expiry" +%s 2>/dev/null || echo 0) - $(date +%s)) / 86400 ))
-        if [ "$left" -le 0 ]; then
-            echo "\"$IDENTITY\" expired on $expiry; issue a new one." >&2
+    # A timestamped signature keeps validating after its certificate expires,
+    # but nothing new can be signed with an expired one.
+    if [ -n "${IDENTITY_DAYS:-}" ]; then
+        if [ "$IDENTITY_DAYS" -le 0 ]; then
+            echo "That certificate expired $(( -IDENTITY_DAYS )) days ago; issue a new one from the G2 sub-CA." >&2
             exit 1
         fi
-        [ "$left" -lt 60 ] && echo "Note: the signing certificate expires in $left days ($expiry)."
+        if [ "$IDENTITY_SUBCA" != "G2" ]; then
+            echo "Note: signing with a certificate from Apple's previous sub-CA, which stops"
+            echo "      issuing and verifying new signatures on 1 Feb 2027 ($IDENTITY_DAYS days)."
+            echo "      Replace it from the G2 sub-CA; this build stays valid, it is timestamped."
+        elif [ "$IDENTITY_DAYS" -lt 60 ]; then
+            echo "Note: the signing certificate expires in $IDENTITY_DAYS days."
+        fi
     fi
 fi
 
-if [ "$skip_build" = 0 ]; then
-    echo "==> Building the recorder and the vision helper"
-    (cd "$root" && cargo build --release -p openscrib-cli -p openscrib-vision)
-    echo "==> Building OpenSCRIB.app"
-    (cd "$root/app" && npx tauri build --bundles app)
-
-    rm -rf "$out"
-    mkdir -p "$out"
-    cp -R "$root/target/release/bundle/macos/OpenSCRIB.app" "$app"
-
-    # Both helpers go beside the app binary, where the editor looks for them.
-    # "openscrib-cli", not "openscrib": the disk is case-insensitive, so that
-    # would collide with the app's own OpenSCRIB binary.
-    cp "$root/target/release/openscrib" "$app/Contents/MacOS/openscrib-cli"
-    cp "$root/target/release/openscrib-vision" "$app/Contents/MacOS/openscrib-vision"
-
-    cp "$root/LICENSE-MIT" "$out/LICENSE-MIT.txt"
-    cat > "$out/README.txt" <<TXT
-OpenSCRIB $version - macOS ($arch)
-Copyright (c) 2026 Rovamp Services Pty Ltd
-
-Drag OpenSCRIB.app to Applications and open it.
-
-First run:
-  1. macOS asks for Screen Recording and Accessibility. Both are needed:
-     without them a recording captures nothing. The home screen has the
-     buttons, and macOS reopens OpenSCRIB after you grant them.
-  2. Click "Get OpenH264" on the home screen to enable screen video. It
-     downloads Cisco's free encoder (under 1 MB), as their licence requires.
-  3. Narration asks for the microphone the first time you record.
-
-Your files:
-  ~/Documents/OpenSCRIB                       recordings and exports
-  ~/Library/Application Support/OpenSCRIB     models and OpenH264
-
-Command line:
-  /Applications/OpenSCRIB.app/Contents/MacOS/openscrib-cli --help
-  (it needs the same two permissions, granted to your terminal)
-TXT
-    echo "Built $app"
-fi
-
-[ -d "$app" ] || { echo "$app doesn't exist; build it first" >&2; exit 1; }
-
-# Cargo's own stripping needs rust-objcopy, which a rustup toolchain without
-# libLLVM.dylib can't run, so the release binaries can still carry their debug
-# info (~20 MB each). strip does the same job, and has to come before signing.
-strip -S -x "$app/Contents/MacOS/"* 2> /dev/null || true
-
 if [ "$sign" = 1 ]; then
-    echo "==> Signing with \"$IDENTITY\""
+    echo "==> Signing with \"$IDENTITY_NAME\" [$IDENTITY, sub-CA $IDENTITY_SUBCA]"
     # Inside out: the nested binaries first, then the bundle itself. Each one
     # gets the hardened runtime and a trusted timestamp, which notarizing
     # requires.
