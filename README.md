@@ -100,7 +100,7 @@ Building libopus needs CMake and a complete Visual Studio C++ toolset. If CMake 
 cargo run -p openscrib-cli -- record --out demo.scrib
 ```
 
-Click around, type something, then press **Ctrl+Shift+F12** to stop.
+Click around, type something, then press **Ctrl+Shift+F12** to stop (change it with `--stop-key`, or in the editor's Settings).
 Without `--out`, recordings go to `projects/` beside the executable
 (`target/release/projects/` under `cargo run --release`). `info`, `probe` and
 `markers` also look there, so the bare file name that `record` prints works.

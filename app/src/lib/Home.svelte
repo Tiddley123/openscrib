@@ -85,10 +85,10 @@
           <p class="hint">Screen video needs <code>openh264-2.6.0-win64.dll</code> beside the app or in <code>runtime/</code>.</p>
         {/if}
       </div>
-      <button class="primary big" onclick={() => onrecord({ video, audio, monitor, mic, quality: settings.quality })}>
+      <button class="primary big" onclick={() => onrecord({ video, audio, monitor, mic, quality: settings.quality, stop_key: settings.stopKey })}>
         <span class="rec"></span> Start recording
       </button>
-      <p class="hint">The window minimises while you record. Stop with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F12</kbd>.</p>
+      <p class="hint">The window minimises while you record. Stop with {#each settings.stopKey.split("+") as k, i}{#if i}+{/if}<kbd>{k}</kbd>{/each}.</p>
     </div>
   </section>
 

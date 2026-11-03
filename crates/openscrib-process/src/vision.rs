@@ -17,8 +17,9 @@ const HELPER: &str = "openscrib-vision.exe";
 #[cfg(not(windows))]
 const HELPER: &str = "openscrib-vision";
 
-/// Area shown to the model around a click, in source pixels.
-const CROP: (u32, u32) = (640, 400);
+/// Area shown to the model around a click, in source pixels, before zooming.
+const CROP: (u32, u32) = (300, 190);
+const ZOOM: u32 = 2;
 
 /// The helper executable, next to the running one.
 pub fn helper_path() -> Option<PathBuf> {
@@ -97,17 +98,27 @@ pub fn label_is_weak(label: Option<&str>) -> bool {
     digits * 2 > letters || [" gb", " mb", " kb", " free", " items", " am", " pm"].iter().any(|u| lower.contains(u))
 }
 
-/// Save a crop around the click (with the click ring drawn) for the model.
+/// Save a crop around the click, zoomed 2x so taskbar-sized icons are big
+/// enough to recognise, with the click ring drawn on it.
 pub fn click_crop(frame: &image::RgbaImage, click: &Click, out: &Path) -> Result<()> {
     let (fw, fh) = frame.dimensions();
     let (w, h) = (CROP.0.min(fw), CROP.1.min(fh));
     let x = (click.in_frame.x - w as i32 / 2).clamp(0, (fw - w) as i32);
     let y = (click.in_frame.y - h as i32 / 2).clamp(0, (fh - h) as i32);
-    let mut crop = imageops::crop_imm(frame, x as u32, y as u32, w, h).to_image();
-    let at = Point::new(click.in_frame.x - x, click.in_frame.y - y);
-    draw_marker(&mut crop, at, MarkerStyle { radius: 26.0, ring: 4.0, color: [255, 92, 53], fill_alpha: 0.0 });
+    let crop = imageops::crop_imm(frame, x as u32, y as u32, w, h).to_image();
+    let mut crop = imageops::resize(&crop, w * ZOOM, h * ZOOM, imageops::FilterType::CatmullRom);
+    let at = Point::new((click.in_frame.x - x) * ZOOM as i32, (click.in_frame.y - y) * ZOOM as i32);
+    draw_marker(&mut crop, at, MarkerStyle { radius: 44.0, ring: 5.0, color: [255, 92, 53], fill_alpha: 0.0 });
     crop.save(out)?;
     Ok(())
+}
+
+/// Whether OCR and the model name the same thing ("This PC" vs "This PC
+/// icon"), so the exact OCR text can be kept.
+pub fn same_label(ocr: &str, vision: &str) -> bool {
+    let norm = |s: &str| s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+    let (o, v) = (norm(ocr), norm(vision));
+    !o.is_empty() && (v.contains(&o) || o.contains(&v))
 }
 
 fn verb(click: Option<&Click>) -> &'static str {
@@ -125,33 +136,75 @@ pub fn identify_prompt(step: &Step) -> String {
         .filter(|w| !is_remote_viewer(&w.process) && !w.title.trim().is_empty())
         .map(|w| format!(" in the window \"{}\"", w.title.trim()))
         .unwrap_or_default();
+    // No example names and no OCR hint: a 3B model repeats whatever it is
+    // shown ("Local Disk (C:) drive", "RSFOC") instead of looking.
     format!(
-        "This is part of a screenshot{app}. The user {} the item inside the orange circle. \
-         What is that item? Reply with its visible label, or if it has none a short name such as \
-         \"Start button\", \"Settings gear icon\" or \"Local Disk (C:) drive\". Reply with 2 to 6 words only.",
+        "This is a zoomed-in part of a screenshot{app}. The user {} the item inside the orange circle. \
+         What exactly is inside the circle? If it has a visible text label, reply with that text. If it is an \
+         icon, reply with what it is, using the program's name for program icons. Reply with 1 to 5 words only.",
         verb(step.click.as_ref())
     )
 }
 
-/// Rewrite an accurate draft using the presenter's narration. The draft
-/// carries the facts (action and target), so the model only adds the why.
+/// Rewrite an accurate draft using the presenter's narration. No examples:
+/// the model copies them. Its answer is checked by [`accept_polish`].
 pub fn polish_prompt(step: &Step, draft: &str) -> String {
     let said = step.transcript.as_deref().unwrap_or_default().trim();
-    let what = if step.kind == StepKind::Note {
-        "Turn what the presenter said into one or two clear sentences for a how-to guide.".to_string()
-    } else {
-        format!(
-            "Improve a how-to guide step with what the presenter said.\n\n\
-             Example:\n\
-             Step: Click **Settings**.\n\
-             The presenter said: \"so now we hit settings, that's where the backup options are\"\n\
-             Improved: Click **Settings**, where the backup options are.\n\n\
-             Now do the same. Keep the action word and the **bold** name exactly. Add the reason or detail \
-             the presenter gives; leave out filler like \"okay\" or \"so now\". At most two short sentences.\n\
-             Step: {draft}"
-        )
-    };
-    format!("{what}\nThe presenter said: \"{said}\"\nImproved:")
+    if step.kind == StepKind::Note {
+        return format!(
+            "Turn what a presenter said into one or two clear sentences for a how-to guide. Use only their words \
+             and meaning; drop filler like \"okay\" or \"so now\".\nThe presenter said: \"{said}\"\nSentences:"
+        );
+    }
+    format!(
+        "A how-to guide step reads: {draft}\nWhile doing it, the presenter said: \"{said}\"\n\n\
+         Rewrite the step to include any useful instruction or reason from what the presenter said. Keep the \
+         action word and the **bold** name exactly. Use only what the presenter said; add nothing else. Drop \
+         filler like \"okay\" or \"so now\" and anything that just repeats the step. At most two short \
+         sentences.\nRewritten step:"
+    )
+}
+
+fn words(s: &str) -> Vec<String> {
+    s.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 4)
+        .map(str::to_string)
+        .collect()
+}
+
+/// A rewrite is kept only if it keeps the bold name and every longer word it
+/// adds comes from the draft or the narration, so nothing is invented.
+pub fn accept_polish(draft: &str, narration: &str, rewrite: &str) -> bool {
+    let bold = draft.split("**").nth(1);
+    if bold.is_some_and(|b| !rewrite.contains(&format!("**{b}**"))) {
+        return false;
+    }
+    let known: Vec<String> = words(draft).into_iter().chain(words(narration)).collect();
+    // Allow small inflections: "install" said, "installed" written.
+    // Joining words a rewrite may add without changing the meaning.
+    const GLUE: [&str; 16] = [
+        "then", "where", "which", "when", "after", "before", "until", "while", "this", "that", "your", "with", "into",
+        "from", "there", "will",
+    ];
+    words(rewrite)
+        .iter()
+        .filter(|w| !GLUE.contains(&w.as_str()))
+        .all(|w| known.iter().any(|k| k == w || (k.len() >= 5 && w.len() >= 5 && k[..5] == w[..5])))
+}
+
+/// Without a usable rewrite: the draft, then the presenter's sentences that
+/// add something (dropping the one that just restates the action).
+pub fn combine(draft: &str, narration: &str) -> String {
+    let label = draft.split("**").nth(1).map(str::to_lowercase);
+    let extra: Vec<String> = narration
+        .split_inclusive(['.', '!', '?'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter(|s| label.as_ref().is_none_or(|l| !s.to_lowercase().contains(l.as_str())))
+        .map(openscrib_core::sentence)
+        .collect();
+    if extra.is_empty() { draft.to_string() } else { format!("{draft} {}", extra.join(" ")) }
 }
 
 pub fn title_prompt(steps: &[String]) -> String {
@@ -184,6 +237,16 @@ mod tests {
         assert!(label_is_weak(Some("27/10/2026 2:49 PM")));
         assert!(!label_is_weak(Some("This PC")));
         assert!(!label_is_weak(Some("Firebird-2.5-QuickStart.pdf")));
+    }
+
+    #[test]
+    fn rejects_invented_rewrites() {
+        let draft = "Click **Firefox**.";
+        let said = "I'm going to open up Firefox. Wait for the updates to install.";
+        assert!(accept_polish(draft, said, "Click **Firefox**, then wait for the updates to install."));
+        assert!(!accept_polish(draft, said, "Click **Firefox**, then wait for it to finish installing."));
+        assert!(!accept_polish(draft, said, "Click **Start**, then wait for the updates."));
+        assert_eq!(combine(draft, said), "Click **Firefox**. Wait for the updates to install.");
     }
 
     #[test]

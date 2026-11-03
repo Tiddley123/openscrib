@@ -375,6 +375,12 @@ impl Manifest {
         format!("#{r:02x}{g:02x}{b:02x}")
     }
 
+    /// Base name for exported files: the title, or "guide" when untitled.
+    pub fn file_stem(&self) -> String {
+        let s = self.title.as_deref().map(safe_name).unwrap_or_default();
+        if s.is_empty() { "guide".into() } else { s }
+    }
+
     /// Rebuild each step's `transcript` from the narration assigned to it.
     pub fn sync_transcripts(&mut self) {
         for step in &mut self.steps {
@@ -409,6 +415,17 @@ pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
         3 => Some([((v >> 8) & 0xF) as u8 * 17, ((v >> 4) & 0xF) as u8 * 17, (v & 0xF) as u8 * 17]),
         _ => None,
     }
+}
+
+/// A title made safe as a Windows file or folder name (empty if nothing
+/// usable is left).
+pub fn safe_name(title: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .map(|c| if r#"<>:"/|?*"#.contains(c) || c.is_control() { '-' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']);
+    cleaned.chars().take(80).collect::<String>().trim().to_string()
 }
 
 /// "Start button" reads better as "the **Start** button": keep the kind of

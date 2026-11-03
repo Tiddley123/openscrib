@@ -15,6 +15,7 @@ use serde_json::json;
 use tracing::warn;
 
 use crate::screen::looks_blank;
+use crate::hotkey::Hotkey;
 
 /// Mouse must rest this long before a click for a tooltip frame to be taken.
 pub const PAUSE_MS: u64 = 500;
@@ -62,11 +63,13 @@ pub struct SessionConfig {
     /// Executable whose windows are never recorded (the editor itself), so
     /// pressing its Stop button doesn't become a step.
     pub ignore_process: Option<String>,
+    /// Key combination that stops the recording.
+    pub stop_key: Hotkey,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
-        Self { capture_keys: true, ignore_process: None }
+        Self { capture_keys: true, ignore_process: None, stop_key: Hotkey::default() }
     }
 }
 
@@ -266,7 +269,7 @@ impl<C: Capture, S: FrameSink> Session<C, S> {
             return Ok(());
         }
         let m = self.mods;
-        if key == Key::F12 && m.ctrl && m.shift {
+        if self.cfg.stop_key.matches(key, m.ctrl, m.alt, m.shift, m.meta) {
             self.stopped = true;
             return Ok(());
         }

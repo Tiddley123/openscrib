@@ -20,6 +20,42 @@
     JSON.stringify(settings)
     saveSettings()
   })
+
+  // Stop shortcut capture. Mirrors `Hotkey::parse` in openscrib-capture.
+  let listening = $state(false)
+  let keyError = $state<string | null>(null)
+  const SPECIAL: Record<string, string> = {
+    Pause: 'Pause', ScrollLock: 'ScrollLock', PrintScreen: 'PrintScreen', Insert: 'Insert', Delete: 'Delete',
+    Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', Escape: 'Esc', Space: 'Space',
+  }
+
+  function keyName(code: string): string | null {
+    if (/^F([1-9]|1[0-2])$/.test(code)) return code
+    if (/^Key[A-Z]$/.test(code)) return code.slice(3)
+    if (/^Digit[0-9]$/.test(code)) return code.slice(5)
+    return SPECIAL[code] ?? null
+  }
+
+  function captureKey(e: KeyboardEvent) {
+    if (!listening) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return
+    const name = keyName(e.code)
+    if (!name) {
+      keyError = `${e.code} can't be used; try a letter, a number, an F-key or Pause.`
+      return
+    }
+    const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Win'].filter(Boolean)
+    const special = /^F\d+$/.test(name) || ['Pause', 'ScrollLock', 'PrintScreen', 'Insert', 'Delete', 'Home', 'End', 'PageUp', 'PageDown', 'Esc'].includes(name)
+    if (!e.ctrlKey && !e.altKey && !e.metaKey && !special) {
+      keyError = 'Add Ctrl, Alt or Win, or that key would stop recording while you type.'
+      return
+    }
+    settings.stopKey = [...mods, name].join('+')
+    keyError = null
+    listening = false
+  }
 </script>
 
 <div
@@ -72,6 +108,23 @@
       <input class="slider" type="range" min="1" max="100" step="1" bind:value={settings.quality} />
       <div class="scale"><span>Smaller files</span><span>Sharper text</span></div>
       <p class="hint">Applies to new recordings and to video exports. Static screens stay small at any setting, because unchanged frames are skipped.</p>
+    </section>
+
+    <section>
+      <div class="label">Stop recording shortcut</div>
+      <div class="hotkey">
+        <button class="keys" class:listening onclick={() => (listening = !listening)} onkeydown={captureKey}>
+          {#if listening}
+            Press the new combination…
+          {:else}
+            {#each settings.stopKey.split('+') as k, i}{#if i}<span class="plus">+</span>{/if}<kbd>{k}</kbd>{/each}
+          {/if}
+        </button>
+        {#if settings.stopKey !== DEFAULTS.stopKey}
+          <button class="ghost small" onclick={() => (settings.stopKey = DEFAULTS.stopKey)}>Reset</button>
+        {/if}
+      </div>
+      <p class="hint" class:warn={keyError}>{keyError ?? 'Click, then press the keys. Use Ctrl, Alt or Win with a key, or a key nobody types like Pause or F9.'}</p>
     </section>
 
     <section>
@@ -202,6 +255,31 @@
     font-size: 12px;
     color: var(--muted);
     margin-top: -4px;
+  }
+  .hotkey {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .keys {
+    min-width: 220px;
+    justify-content: center;
+    gap: 4px;
+  }
+  .keys.listening {
+    border-color: var(--accent);
+    box-shadow: var(--focus);
+    color: var(--accent);
+  }
+  .plus {
+    color: var(--muted);
+  }
+  .small {
+    padding: 4px 10px;
+    font-size: 12.5px;
+  }
+  .hint.warn {
+    color: var(--danger);
   }
   .hint {
     margin: 0;

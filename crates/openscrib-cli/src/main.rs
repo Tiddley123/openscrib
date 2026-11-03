@@ -22,7 +22,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Record clicks, keystrokes, screen video and narration until
-    /// Ctrl+Shift+F12 (or Ctrl+C).
+    /// the stop key (default Ctrl+Shift+F12) or Ctrl+C.
     Record(RecordArgs),
     /// Print a project's steps.
     Info { project: PathBuf },
@@ -126,6 +126,9 @@ struct RecordArgs {
     /// Microphone to use: part of its name (see `devices`).
     #[arg(long)]
     mic: Option<String>,
+    /// Key combination that stops recording, e.g. `Ctrl+Shift+F12` or `Pause`.
+    #[arg(long, default_value = "Ctrl+Shift+F12")]
+    stop_key: String,
     /// Video quality, 1-100 (higher is sharper and larger).
     #[arg(long, default_value_t = openscrib_core::quality::DEFAULT_QUALITY, value_parser = clap::value_parser!(u8).range(1..=100))]
     quality: u8,
@@ -160,7 +163,9 @@ fn main() -> Result<()> {
 }
 
 fn record(args: RecordArgs) -> Result<()> {
-    let RecordArgs { out, no_keys, keep_dir, duration, no_video, no_audio, monitor, fps, mic, quality } = args;
+    let RecordArgs { out, no_keys, keep_dir, duration, no_video, no_audio, monitor, fps, mic, quality, stop_key } = args;
+    let stop_key = openscrib_capture::Hotkey::parse(&stop_key)
+        .with_context(|| format!("can't use \"{stop_key}\" as the stop key; try Ctrl+Shift+F12 or Pause"))?;
     if fps == 0 || fps > 60 {
         bail!("--fps must be between 1 and 60");
     }
@@ -204,7 +209,7 @@ fn record(args: RecordArgs) -> Result<()> {
         });
     }
 
-    let cfg = SessionConfig { capture_keys: !no_keys, ..Default::default() };
+    let cfg = SessionConfig { capture_keys: !no_keys, stop_key, ..Default::default() };
     let manifest = openscrib_capture::record(dir.clone(), cfg, media, stop)?;
     dir.pack(&out)?;
     if !keep_dir {
@@ -388,7 +393,11 @@ fn export(
     let resolved = resolve_project(project);
     let dir = load(&resolved)?;
     let manifest = dir.read_manifest()?;
+    let stem = manifest.file_stem();
     let out = out.unwrap_or_else(|| {
+        if manifest.title.is_some() {
+            return resolved.with_file_name(&stem);
+        }
         let stem = resolved.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "guide".into());
         resolved.with_file_name(format!("{stem}-export"))
     });
@@ -400,22 +409,22 @@ fn export(
     for f in formats {
         let path = match f {
             GuideFormat::Md => {
-                ensure_guide(&mut guide_cache, &dir, &manifest, &opts)?.write_markdown(&out)?;
-                out.join("guide.md")
+                ensure_guide(&mut guide_cache, &dir, &manifest, &opts)?.write_markdown(&out, &stem)?;
+                out.join(format!("{stem}.md"))
             }
             GuideFormat::Html => {
-                let p = out.join("guide.html");
+                let p = out.join(format!("{stem}.html"));
                 ensure_guide(&mut guide_cache, &dir, &manifest, &opts)?.write_html(&p)?;
                 p
             }
             GuideFormat::Mkv | GuideFormat::Mp4 => {
                 let dll = video::locate_openh264().context("video export needs the OpenH264 DLL")?;
                 let (fmt, name) = if *f == GuideFormat::Mkv {
-                    (openscrib_export::video::VideoFormat::Mkv, "guide.mkv")
+                    (openscrib_export::video::VideoFormat::Mkv, format!("{stem}.mkv"))
                 } else {
-                    (openscrib_export::video::VideoFormat::Mp4, "guide.mp4")
+                    (openscrib_export::video::VideoFormat::Mp4, format!("{stem}.mp4"))
                 };
-                let p = out.join(name);
+                let p = out.join(&name);
                 let mut opts = openscrib_export::video::VideoExportOptions::new(dll, fmt);
                 opts.quality = quality;
                 opts.max_width = if max_width == 0 { u32::MAX } else { max_width };
@@ -441,7 +450,7 @@ fn export(
                 p
             }
             GuideFormat::Pdf => {
-                let p = out.join("guide.pdf");
+                let p = out.join(format!("{stem}.pdf"));
                 let g = ensure_guide(&mut guide_cache, &dir, &manifest, &opts)?;
                 g.write_pdf(&p)?;
                 if pdf_pages {

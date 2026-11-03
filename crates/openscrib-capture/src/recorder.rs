@@ -97,7 +97,7 @@ pub struct MediaConfig {
     pub audio: Option<AudioConfig>,
 }
 
-/// Record until Ctrl+Shift+F12 is pressed or `stop` is set.
+/// Record until the stop hotkey is pressed or `stop` is set.
 pub fn record(
     dir: ProjectDir,
     cfg: SessionConfig,
@@ -145,8 +145,9 @@ pub fn record(
 
     let writer = PngWriter::spawn(dir.clone());
     let cursor = platform::cursor_pos().unwrap_or(Point::new(0, 0));
+    let stop_label = cfg.stop_key.to_string();
     let mut session = Session::new(dir.clone(), cfg, LiveCapture, &writer, monitors, cursor)?;
-    info!("recording; press Ctrl+Shift+F12 to stop");
+    info!("recording; press {stop_label} to stop");
 
     while !session.stopped() && !stop.load(Ordering::Relaxed) {
         let wait = session

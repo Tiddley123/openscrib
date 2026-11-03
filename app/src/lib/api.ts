@@ -121,6 +121,7 @@ export interface RecordRequest {
   monitor: number | null
   mic: string | null
   quality: number
+  stop_key: string
 }
 
 export interface ModelStatus {

@@ -154,16 +154,18 @@ pub fn process(
                 say("vision", i as f32 / total as f32, format!("Looking at step {}", i + 1));
                 step.vision = None;
                 let (StepKind::Click, Some(click), Some(frame)) = (step.kind, &step.click, &step.frame) else { continue };
-                if !vision::label_is_weak(step.ocr.as_deref()) {
-                    continue;
-                }
                 let img = image::open(dir.path(frame)).with_context(|| format!("reading {frame}"))?.to_rgba8();
                 vision::click_crop(&img, click, &crop)?;
                 let answer = vision.ask(&vision::identify_prompt(step), Some(&crop), 24)?;
-                step.vision = vision::clean_reply(&answer, 60);
+                // OCR has the exact text when it read real text; the model wins when
+                // they disagree (OCR "reads" icons as nonsense like "HQR").
+                step.vision = vision::clean_reply(&answer, 60)
+                    .filter(|v| !v.eq_ignore_ascii_case("unknown"))
+                    .filter(|v| !step.ocr.as_deref().is_some_and(|o| vision::same_label(o, v)));
                 report.identified += step.vision.is_some() as usize;
             }
             let _ = std::fs::remove_file(&crop);
+            refine_narration(manifest);
             let n = manifest.steps.len();
             for (i, step) in manifest.steps.iter_mut().enumerate() {
                 say("vision", (n + i) as f32 / total as f32, format!("Writing step {}", i + 1));
@@ -175,9 +177,12 @@ pub fn process(
                 }
                 let draft = step.draft_text();
                 let answer = vision.ask(&vision::polish_prompt(step, &draft), None, 80)?;
-                if let Some(text) = vision::clean_reply(&answer, 300) {
-                    step.text = text;
-                }
+                let said = step.transcript.clone().unwrap_or_default();
+                step.text = match vision::clean_reply(&answer, 300) {
+                    Some(text) if vision::accept_polish(&draft, &said, &text) => text,
+                    _ if step.kind == StepKind::Note => openscrib_core::sentence(&said),
+                    _ => vision::combine(&draft, &said),
+                };
             }
             if report.titled || manifest.title.as_deref().is_none_or(|t| t.trim().is_empty()) {
                 let steps: Vec<String> = manifest.steps.iter().map(|s| s.text.clone()).collect();
@@ -188,11 +193,54 @@ pub fn process(
             }
             say("vision", 1.0, format!("Named {} items", report.identified));
         }
-        None => report.skipped.push("Writing: vision model not installed".into()),
+        None => {
+            refine_narration(manifest);
+            for step in &mut manifest.steps {
+                step.refresh_text();
+            }
+            report.skipped.push("Writing: vision model not installed".into());
+        }
     }
 
     report.redrafted = manifest.steps.iter().zip(&before).filter(|(s, b)| s.text != **b).count();
     Ok(report)
+}
+
+/// Move narration that names the next action onto that action: people often
+/// say "now I'll open Firefox" a few seconds before clicking it. A segment
+/// moves forward to one of the next three steps (within 15 s) whose label or
+/// typed text it mentions; otherwise it stays with the step it followed.
+fn refine_narration(manifest: &mut Manifest) {
+    let keywords = |s: &openscrib_core::Step| -> Vec<String> {
+        let text = [s.vision.as_deref(), s.ocr.as_deref(), s.keys.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        text.split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() >= 4 && !["button", "icon", "click", "enter", "drive", "menu", "field"].contains(w))
+            .map(str::to_string)
+            .collect()
+    };
+    let mut order: Vec<usize> = (0..manifest.steps.len()).collect();
+    order.sort_by_key(|&i| manifest.steps[i].t_ms);
+    for seg in &mut manifest.narration {
+        let said = seg.text.to_lowercase();
+        let Some(pos) = order.iter().position(|&i| Some(manifest.steps[i].id) == seg.step) else { continue };
+        for &next in order.iter().skip(pos + 1).take(3) {
+            let step = &manifest.steps[next];
+            if step.t_ms > seg.end_ms + 15_000 {
+                break;
+            }
+            // "youtu" typed matches "YouTube" said: compare on prefixes.
+            if keywords(step).iter().any(|k| said.split(|c: char| !c.is_alphanumeric()).any(|w| w.len() >= 4 && (w.starts_with(k.as_str()) || k.starts_with(w)))) {
+                seg.step = Some(step.id);
+                break;
+            }
+        }
+    }
+    manifest.sync_transcripts();
 }
 
 fn tempfile_path(name: &str) -> PathBuf {

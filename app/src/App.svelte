@@ -6,6 +6,7 @@
   import Editor from './lib/Editor.svelte'
   import Home from './lib/Home.svelte'
   import SettingsDialog from './lib/SettingsDialog.svelte'
+  import { settings } from './lib/settings.svelte'
 
   let project = $state<ProjectView | null>(null)
   let recording = $state(false)
@@ -60,7 +61,7 @@
   <main class="recording">
     <div class="pulse"></div>
     <h1>Recording</h1>
-    <p>Click and type through the task. Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F12</kbd> or Stop when you're done.</p>
+    <p>Click and type through the task. Press {#each settings.stopKey.split('+') as k, i}{#if i}+{/if}<kbd>{k}</kbd>{/each} or Stop when you're done.</p>
     <button class="primary" onclick={() => api.stopRecording()}>Stop recording</button>
   </main>
 {:else if project}

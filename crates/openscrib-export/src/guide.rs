@@ -66,8 +66,8 @@ impl Guide {
         format!("step-{number:02}.png")
     }
 
-    /// `out_dir/guide.md` plus `out_dir/images/step-NN.png`.
-    pub fn write_markdown(&self, out_dir: &Path) -> Result<()> {
+    /// `out_dir/<stem>.md` plus `out_dir/images/step-NN.png`.
+    pub fn write_markdown(&self, out_dir: &Path, stem: &str) -> Result<()> {
         fs::create_dir_all(out_dir.join("images"))?;
         let mut md = format!("# {}\n\n", self.title.replace('\n', " "));
         for s in &self.steps {
@@ -79,7 +79,7 @@ impl Guide {
             }
             md.push('\n');
         }
-        fs::write(out_dir.join("guide.md"), md).context("writing guide.md")?;
+        fs::write(out_dir.join(format!("{stem}.md")), md).with_context(|| format!("writing {stem}.md"))?;
         Ok(())
     }
 

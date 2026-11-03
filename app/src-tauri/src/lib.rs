@@ -226,6 +226,7 @@ fn run_export(app: &AppHandle, dir: &ProjectDir, req: ExportRequest) -> anyhow::
     let out = PathBuf::from(&req.out_dir);
     fs::create_dir_all(&out)?;
     let manifest = req.manifest;
+    let stem = manifest.file_stem();
     let opts = RenderOptions { crop: if req.full_frame { CropMode::Full } else { CropMode::Window }, ..Default::default() };
     let progress = |format: &str, progress: f32| {
         let _ = app.emit("export-progress", ExportProgress { format: format.into(), progress });
@@ -243,16 +244,16 @@ fn run_export(app: &AppHandle, dir: &ProjectDir, req: ExportRequest) -> anyhow::
                 let g = guide.as_ref().expect("built");
                 match f.as_str() {
                     "md" => {
-                        g.write_markdown(&out)?;
-                        out.join("guide.md")
+                        g.write_markdown(&out, &stem)?;
+                        out.join(format!("{stem}.md"))
                     }
                     "html" => {
-                        let p = out.join("guide.html");
+                        let p = out.join(format!("{stem}.html"));
                         g.write_html(&p)?;
                         p
                     }
                     _ => {
-                        let p = out.join("guide.pdf");
+                        let p = out.join(format!("{stem}.pdf"));
                         g.write_pdf(&p)?;
                         p
                     }
@@ -261,7 +262,7 @@ fn run_export(app: &AppHandle, dir: &ProjectDir, req: ExportRequest) -> anyhow::
             "mkv" | "mp4" => {
                 let dll = video::locate_openh264()
                     .ok_or_else(|| anyhow::anyhow!("video export needs {}", video::OPENH264_DLL))?;
-                let (fmt, name) = if f == "mkv" { (VideoFormat::Mkv, "guide.mkv") } else { (VideoFormat::Mp4, "guide.mp4") };
+                let (fmt, name) = if f == "mkv" { (VideoFormat::Mkv, format!("{stem}.mkv")) } else { (VideoFormat::Mp4, format!("{stem}.mp4")) };
                 let p = out.join(name);
                 let mut opts = VideoExportOptions::new(dll, fmt);
                 opts.quality = req.quality.clamp(1, 100);
@@ -284,6 +285,8 @@ struct RecordRequest {
     monitor: Option<u32>,
     mic: Option<String>,
     quality: u8,
+    #[serde(default)]
+    stop_key: Option<String>,
 }
 
 #[tauri::command]
@@ -314,7 +317,8 @@ fn start_recording(app: AppHandle, state: State<AppState>, req: RecordRequest) -
     let own_exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
-    let cfg = SessionConfig { capture_keys: true, ignore_process: own_exe };
+    let stop_key = req.stop_key.as_deref().and_then(openscrib_capture::Hotkey::parse).unwrap_or_default();
+    let cfg = SessionConfig { capture_keys: true, ignore_process: own_exe, stop_key };
 
     let stop = Arc::new(AtomicBool::new(false));
     *rec = Some(Recording { stop: stop.clone() });
@@ -467,7 +471,7 @@ fn default_export_dir(state: State<AppState>, title: Option<String>) -> CmdResul
         // Name the folder after the guide; fall back to the recording's name.
         let name = title
             .as_deref()
-            .map(folder_name)
+            .map(openscrib_core::safe_name)
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| {
                 let stem = p.source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "guide".into());
@@ -475,16 +479,6 @@ fn default_export_dir(state: State<AppState>, title: Option<String>) -> CmdResul
             });
         Ok(p.source.with_file_name(name).to_string_lossy().into_owned())
     })
-}
-
-/// A guide title made safe as a Windows folder name.
-fn folder_name(title: &str) -> String {
-    let cleaned: String = title
-        .chars()
-        .map(|c| if r#"<>:"/\|?*"#.contains(c) || c.is_control() { '-' } else { c })
-        .collect();
-    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']);
-    cleaned.chars().take(80).collect::<String>().trim().to_string()
 }
 
 #[derive(Serialize)]

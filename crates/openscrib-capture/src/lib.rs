@@ -3,6 +3,7 @@
 //! input into a project manifest.
 
 pub mod audio;
+pub mod hotkey;
 pub mod media;
 pub mod platform;
 pub mod recorder;
@@ -11,4 +12,5 @@ pub mod session;
 pub mod video;
 
 pub use recorder::{MediaConfig, record};
+pub use hotkey::Hotkey;
 pub use session::SessionConfig;
