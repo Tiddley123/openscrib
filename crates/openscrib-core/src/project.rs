@@ -6,8 +6,7 @@
 //! myguide.scrib (zip)
 //! ├── project.json
 //! ├── events.jsonl     # raw input log, for re-deriving steps later
-//! ├── screen.mkv       # (M2)
-//! ├── audio.opus       # (M2)
+//! ├── screen.mkv       # H.264 screen + Opus narration
 //! └── frames/
 //! ```
 
@@ -24,6 +23,7 @@ pub const PROJECT_EXT: &str = "scrib";
 pub const MANIFEST_FILE: &str = "project.json";
 pub const EVENTS_FILE: &str = "events.jsonl";
 pub const FRAMES_DIR: &str = "frames";
+pub const SCREEN_FILE: &str = "screen.mkv";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {

@@ -213,6 +213,31 @@ impl Step {
     }
 }
 
+/// The continuous screen recording. Block timestamps in `file` are on the
+/// recording clock, so `Step::t_ms` is also the step's position in the video.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VideoTrack {
+    pub file: String,
+    pub monitor: u32,
+    pub width: u32,
+    pub height: u32,
+    pub max_fps: u32,
+    /// Frames actually encoded; unchanged frames are skipped.
+    pub frames: u64,
+    pub first_ms: u64,
+}
+
+/// Narration, stored as the Opus track of the same file as the video.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioTrack {
+    pub file: String,
+    pub device: String,
+    /// Device rate before resampling to Opus's 48 kHz.
+    pub device_rate: u32,
+    pub channels: u8,
+    pub first_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     pub version: u32,
@@ -221,6 +246,10 @@ pub struct Manifest {
     pub created: OffsetDateTime,
     pub duration_ms: u64,
     pub monitors: Vec<MonitorInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<VideoTrack>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<AudioTrack>,
     pub steps: Vec<Step>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
@@ -234,6 +263,8 @@ impl Manifest {
             created: OffsetDateTime::now_utc(),
             duration_ms: 0,
             monitors: Vec::new(),
+            video: None,
+            audio: None,
             steps: Vec::new(),
             warnings: Vec::new(),
         }

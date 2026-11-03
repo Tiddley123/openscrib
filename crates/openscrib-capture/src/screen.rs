@@ -13,7 +13,7 @@ pub fn monitors() -> Result<Vec<MonitorInfo>> {
         .collect()
 }
 
-fn info(m: &Monitor) -> Result<MonitorInfo> {
+pub(crate) fn info(m: &Monitor) -> Result<MonitorInfo> {
     Ok(MonitorInfo {
         id: m.id()?,
         name: m.friendly_name().or_else(|_| m.name())?,

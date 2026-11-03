@@ -10,6 +10,8 @@ anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 ctrlc = "3.5.2"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+matroska-demuxer = "0.8.1"
+openh264 = { version = "0.9.9", default-features = false, features = ["libloading"] }
 openscrib-capture = { version = "0.1.0", path = "../openscrib-capture" }
 openscrib-core = { version = "0.1.0", path = "../openscrib-core" }
 time = { version = "0.3.55", features = ["formatting", "macros", "local-offset"] }

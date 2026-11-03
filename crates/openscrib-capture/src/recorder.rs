@@ -12,10 +12,16 @@ use anyhow::{Result, bail};
 use crossbeam_channel::{RecvTimeoutError, Sender, unbounded};
 use image::RgbaImage;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use openscrib_core::{Clock, Manifest, MonitorInfo, MouseButton, Point, ProjectDir, WindowInfo};
-use tracing::{error, info};
+use openscrib_core::project::SCREEN_FILE;
+use openscrib_core::{
+    AudioTrack, Clock, Manifest, MonitorInfo, MouseButton, Point, ProjectDir, VideoTrack, WindowInfo,
+};
+use tracing::{error, info, warn};
 
+use crate::audio::{self, AudioConfig, Narration};
+use crate::media::Muxer;
 use crate::session::{Capture, FrameSink, Input, Session, SessionConfig, TimedInput};
+use crate::video::{ScreenVideo, VideoConfig};
 use crate::{platform, screen};
 
 /// Upper bound on how long the loop sleeps, so the stop flag is noticed.
@@ -83,8 +89,21 @@ fn write_png(path: &std::path::Path, img: &RgbaImage) -> Result<()> {
     Ok(())
 }
 
+/// Which continuous streams to record alongside the steps. Each is optional;
+/// one that fails to start is skipped with a manifest warning.
+#[derive(Debug, Clone, Default)]
+pub struct MediaConfig {
+    pub video: Option<VideoConfig>,
+    pub audio: Option<AudioConfig>,
+}
+
 /// Record until Ctrl+Shift+F12 is pressed or `stop` is set.
-pub fn record(dir: ProjectDir, cfg: SessionConfig, stop: Arc<AtomicBool>) -> Result<Manifest> {
+pub fn record(
+    dir: ProjectDir,
+    cfg: SessionConfig,
+    media: MediaConfig,
+    stop: Arc<AtomicBool>,
+) -> Result<Manifest> {
     platform::init_dpi_awareness();
     let monitors = screen::monitors()?;
     for m in &monitors {
@@ -92,6 +111,36 @@ pub fn record(dir: ProjectDir, cfg: SessionConfig, stop: Arc<AtomicBool>) -> Res
     }
 
     let clock = Clock::start();
+    let mut warnings = Vec::new();
+    let muxer = match (&media.video, &media.audio) {
+        (None, None) => None,
+        (v, a) => Some(Muxer::create(&dir.path(SCREEN_FILE), v.is_some(), a.as_ref().map(|_| audio::spec()))?),
+    };
+    let video = match (&media.video, &muxer) {
+        (Some(vc), Some(mux)) => match ScreenVideo::start(vc, clock, mux.clone()) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                warnings.push(format!("Screen video disabled: {e:#}"));
+                mux.start_without_video()?;
+                None
+            }
+        },
+        _ => None,
+    };
+    let narration = match (&media.audio, &muxer) {
+        (Some(ac), Some(mux)) => match Narration::start(ac, clock, mux.clone()) {
+            Ok(n) => Some(n),
+            Err(e) => {
+                warnings.push(format!("Narration disabled: {e:#}"));
+                None
+            }
+        },
+        _ => None,
+    };
+    for w in &warnings {
+        warn!("{w}");
+    }
+
     let (tx, rx) = unbounded::<TimedInput>();
     thread::Builder::new().name("input-hook".into()).spawn(move || {
         let res = rdev::listen(move |e| {
@@ -107,7 +156,7 @@ pub fn record(dir: ProjectDir, cfg: SessionConfig, stop: Arc<AtomicBool>) -> Res
 
     let writer = PngWriter::spawn(dir.clone());
     let cursor = platform::cursor_pos().unwrap_or(Point::new(0, 0));
-    let mut session = Session::new(dir, cfg, LiveCapture, &writer, monitors, cursor)?;
+    let mut session = Session::new(dir.clone(), cfg, LiveCapture, &writer, monitors, cursor)?;
     info!("recording; press Ctrl+Shift+F12 to stop");
 
     while !session.stopped() && !stop.load(Ordering::Relaxed) {
@@ -130,8 +179,48 @@ pub fn record(dir: ProjectDir, cfg: SessionConfig, stop: Arc<AtomicBool>) -> Res
         session.tick(clock.now_ms())?;
     }
 
-    let manifest = session.finish(clock.now_ms())?;
+    let end_ms = clock.now_ms();
+    let mut manifest = session.finish(end_ms)?;
     writer.finish();
+
+    // Stop media after the session so the video covers the final step.
+    if let Some(v) = video {
+        match v.stop() {
+            Ok(s) => {
+                info!("video: {} frames encoded", s.frames);
+                manifest.video = s.first_ms.map(|first_ms| VideoTrack {
+                    file: SCREEN_FILE.into(),
+                    monitor: s.monitor.id,
+                    width: s.width,
+                    height: s.height,
+                    max_fps: media.video.as_ref().map_or(0, |c| c.fps),
+                    frames: s.frames,
+                    first_ms,
+                });
+            }
+            Err(e) => warnings.push(format!("Screen video stopped early: {e:#}")),
+        }
+    }
+    if let Some(n) = narration {
+        match n.stop() {
+            Ok(s) => {
+                info!("audio: {} packets ({:.1}s)", s.packets, s.packets as f64 * 0.02);
+                manifest.audio = s.first_ms.map(|first_ms| AudioTrack {
+                    file: SCREEN_FILE.into(),
+                    device: s.device,
+                    device_rate: s.device_rate,
+                    channels: 1,
+                    first_ms,
+                });
+            }
+            Err(e) => warnings.push(format!("Narration stopped early: {e:#}")),
+        }
+    }
+    if let Some(mux) = muxer {
+        mux.finish(end_ms)?;
+    }
+    manifest.warnings.extend(warnings);
+    dir.write_manifest(&manifest)?;
     // The hook thread blocks inside the OS message loop for the life of the
     // process; rdev offers no way to unhook, so it is left to exit with us.
     Ok(manifest)

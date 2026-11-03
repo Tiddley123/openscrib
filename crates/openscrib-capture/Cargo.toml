@@ -6,9 +6,12 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
 image = "0.25.10"
+openh264 = { version = "0.9.9", default-features = false, features = ["libloading"] }
 openscrib-core = { version = "0.1.0", path = "../openscrib-core" }
+opus = "0.4.0"
 rdev = "0.5.3"
 serde_json = "1.0.154"
 tracing = "0.1.44"

@@ -16,13 +16,19 @@ pub struct MarkerStyle {
 
 impl Default for MarkerStyle {
     fn default() -> Self {
-        Self { radius: 20.0, ring: 4.0, color: [255, 92, 53], fill_alpha: 0.22 }
+        // Wide enough to frame a 32 px toolbar icon with clear space inside, so
+        // the target stays readable; no fill for the same reason.
+        Self { radius: 30.0, ring: 4.0, color: [255, 92, 53], fill_alpha: 0.0 }
     }
 }
 
 impl MarkerStyle {
-    pub fn for_click(click: &Click) -> Self {
+    /// `scale` is the monitor scale factor, so markers keep their size on HiDPI screens.
+    pub fn for_click(click: &Click, scale: f32) -> Self {
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
         let mut s = Self::default();
+        s.radius *= scale;
+        s.ring *= scale;
         if click.button == MouseButton::Right {
             s.color = [53, 132, 255];
         }
@@ -30,7 +36,7 @@ impl MarkerStyle {
     }
 }
 
-/// Draw an anti-aliased ring with a soft fill and a thin white halo so the
+/// Draw an anti-aliased ring (optionally filled) with a thin white halo so the
 /// marker reads on both light and dark UIs.
 pub fn draw_marker(img: &mut RgbaImage, at: Point, style: MarkerStyle) {
     let halo = style.ring + 2.0;
@@ -59,11 +65,11 @@ pub fn draw_marker(img: &mut RgbaImage, at: Point, style: MarkerStyle) {
     }
 }
 
-pub fn draw_click(img: &mut RgbaImage, click: &Click) {
-    let style = MarkerStyle::for_click(click);
+pub fn draw_click(img: &mut RgbaImage, click: &Click, scale: f32) {
+    let style = MarkerStyle::for_click(click, scale);
     draw_marker(img, click.in_frame, style);
     if click.double {
-        draw_marker(img, click.in_frame, MarkerStyle { radius: style.radius - 8.0, fill_alpha: 0.0, ..style });
+        draw_marker(img, click.in_frame, MarkerStyle { radius: style.radius + style.ring * 2.5, ..style });
     }
 }
 
@@ -88,8 +94,12 @@ mod tests {
     fn ring_lands_on_click_and_clips_at_edges() {
         let mut img = RgbaImage::from_pixel(100, 100, Rgba([0, 0, 0, 255]));
         draw_marker(&mut img, Point::new(50, 50), MarkerStyle::default());
+        let r = MarkerStyle::default().radius as u32;
         // On the ring, directly right of centre.
-        assert!(img.get_pixel(70, 50).0[0] > 200);
+        assert!(img.get_pixel(50 + r, 50).0[0] > 200);
+        // The clicked target itself stays untouched.
+        assert_eq!(img.get_pixel(50, 50).0, [0, 0, 0, 255]);
+        assert_eq!(img.get_pixel(50 + r / 2, 50).0, [0, 0, 0, 255]);
         // Far corner untouched.
         assert_eq!(img.get_pixel(0, 0).0, [0, 0, 0, 255]);
         // Must not panic near or past edges.

@@ -4,6 +4,7 @@
 pub mod clock;
 pub mod manifest;
 pub mod markers;
+pub mod mkv;
 pub mod project;
 
 pub use clock::Clock;
