@@ -144,4 +144,6 @@ the unpacked working directory. If a recording crashes, run
 
 ## Licence
 
+Copyright © 2026 Rovamp Services Pty Ltd.
+
 Dual-licensed under MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0, at your option.
