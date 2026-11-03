@@ -50,7 +50,8 @@ pub fn download_openh264() -> Result<PathBuf> {
     if hash != OPENH264_SHA256 {
         bail!("the downloaded OpenH264 doesn't match Cisco's published build (hash {hash})");
     }
-    let dir = std::env::current_exe()?.parent().context("executable folder")?.to_path_buf();
+    let dir = openscrib_core::paths::data_dir();
+    std::fs::create_dir_all(&dir)?;
     let dest = dir.join(OPENH264_DLL);
     std::fs::write(&dest, dll).with_context(|| format!("saving {}", dest.display()))?;
     Ok(dest)
@@ -88,6 +89,10 @@ pub struct ScreenVideo {
 pub fn locate_openh264() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("OPENSCRIB_OPENH264").map(PathBuf::from) {
         return p.is_file().then_some(p);
+    }
+    let in_data = openscrib_core::paths::data_dir().join(OPENH264_DLL);
+    if in_data.is_file() {
+        return Some(in_data);
     }
     let exe = std::env::current_exe().ok()?;
     let mut dir = exe.parent();

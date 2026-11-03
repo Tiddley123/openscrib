@@ -75,10 +75,7 @@ struct RecentItem {
 
 /// Recordings live in `projects/` beside the executable, like the CLI.
 fn projects_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(|p| p.join("projects")))
-        .unwrap_or_else(|| PathBuf::from("projects"))
+    openscrib_core::paths::projects_dir()
 }
 
 #[tauri::command]

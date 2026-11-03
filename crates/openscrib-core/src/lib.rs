@@ -6,6 +6,7 @@ pub mod manifest;
 pub mod markers;
 pub mod mkv;
 pub mod mp4;
+pub mod paths;
 pub mod project;
 pub mod quality;
 

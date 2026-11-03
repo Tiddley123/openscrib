@@ -244,13 +244,12 @@ fn record(args: RecordArgs) -> Result<()> {
 /// `projects/recording-YYYYMMDD-HHMMSS.scrib` beside the executable, so the
 /// app folder stays self-contained.
 fn default_project_path() -> Result<PathBuf> {
-    let exe = std::env::current_exe()?;
-    let base = exe.parent().context("executable has no parent dir")?;
+    let base = openscrib_core::paths::projects_dir();
     let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     let stamp = now.format(time::macros::format_description!(
         "[year][month][day]-[hour][minute][second]"
     ))?;
-    Ok(base.join("projects").join(format!("recording-{stamp}.{PROJECT_EXT}")))
+    Ok(base.join(format!("recording-{stamp}.{PROJECT_EXT}")))
 }
 
 /// A relative path that doesn't exist here is also tried inside the default

@@ -162,6 +162,9 @@ pub fn models_dir() -> PathBuf {
     if let Some(p) = std::env::var_os("OPENSCRIB_MODELS") {
         return PathBuf::from(p);
     }
+    if openscrib_core::paths::is_installed() {
+        return openscrib_core::paths::data_dir().join("models");
+    }
     let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
     let mut dir = exe_dir.as_deref();
     while let Some(d) = dir {
