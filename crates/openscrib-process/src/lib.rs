@@ -1,5 +1,5 @@
-//! The "Process" stage: narration → transcript (Whisper), click labels and
-//! tooltips → OCR, then draft step text from both. Each stage runs only if
+//! The "Process" stage: narration â transcript (Whisper), click labels and
+//! tooltips â OCR, then draft step text from both. Each stage runs only if
 //! its model is installed, one model at a time, and never overwrites text
 //! the user has edited.
 
@@ -165,6 +165,7 @@ pub fn process(
                 report.identified += step.vision.is_some() as usize;
             }
             let _ = std::fs::remove_file(&crop);
+            name_from_context(manifest);
             refine_narration(manifest);
             let n = manifest.steps.len();
             for (i, step) in manifest.steps.iter_mut().enumerate() {
@@ -194,6 +195,7 @@ pub fn process(
             say("vision", 1.0, format!("Named {} items", report.identified));
         }
         None => {
+            name_from_context(manifest);
             refine_narration(manifest);
             for step in &mut manifest.steps {
                 step.refresh_text();
@@ -210,6 +212,77 @@ pub fn process(
 /// say "now I'll open Firefox" a few seconds before clicking it. A segment
 /// moves forward to one of the next three steps (within 15 s) whose label or
 /// typed text it mentions; otherwise it stays with the step it followed.
+/// Facts from the recording beat the model's guesses:
+/// - A click on the taskbar that is followed by work in another app opened
+///   that app, so the icon is named after it ("scales - BambuStudio" ->
+///   "BambuStudio"), not whatever the icon looked like to the model.
+/// - A model answer that is just the current app's own name says nothing
+///   about what was clicked, so it is dropped.
+fn name_from_context(manifest: &mut Manifest) {
+    let mut order: Vec<usize> = (0..manifest.steps.len()).collect();
+    order.sort_by_key(|&i| manifest.steps[i].t_ms);
+    for (n, &i) in order.iter().enumerate() {
+        let next_app = order.get(n + 1).map(|&j| &manifest.steps[j]).filter(|next| {
+            next.t_ms <= manifest.steps[i].t_ms + 20_000
+        }).and_then(|next| next.window.as_ref()).filter(|w| !w.process.eq_ignore_ascii_case("explorer.exe")).map(app_name);
+        let step = &mut manifest.steps[i];
+        let Some(win) = &step.window else { continue };
+        let on_taskbar = win.process.eq_ignore_ascii_case("explorer.exe") && win.rect.h <= 120 && win.rect.w >= 400;
+        if step.kind == StepKind::Click && on_taskbar && let Some(app) = next_app.filter(|a| !a.is_empty()) {
+            step.vision = Some(app);
+            continue;
+        }
+        let own = app_name(win);
+        if step.vision.as_deref().is_some_and(|v| similar(v, &own)) {
+            step.vision = None;
+        }
+    }
+}
+
+/// The app part of a window title ("scales - BambuStudio" -> "BambuStudio"),
+/// or a tidied process name when the title has none.
+fn app_name(w: &openscrib_core::WindowInfo) -> String {
+    let from_title = [" - ", " — ", " | "]
+        .iter()
+        .filter_map(|sep| w.title.rsplit_once(sep).map(|(_, app)| app.trim()))
+        .find(|a| !a.is_empty());
+    match from_title {
+        Some(app) => app.to_string(),
+        None if !w.title.trim().is_empty() && w.title.len() <= 40 => w.title.trim().to_string(),
+        None => {
+            let stem = w.process.trim_end_matches(".exe").trim_end_matches(".EXE");
+            stem.split(['-', '_'])
+                .filter(|p| !p.is_empty())
+                .map(|p| {
+                    let mut c = p.chars();
+                    c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    }
+}
+
+/// Loose name match ("Bamboo Studio" vs "BambuStudio"): letters only, and
+/// at most a quarter of them different.
+fn similar(a: &str, b: &str) -> bool {
+    let norm = |s: &str| s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<Vec<_>>();
+    let (a, b) = (norm(a), norm(b));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    // Levenshtein distance.
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut cur = vec![i + 1; b.len() + 1];
+        for (j, cb) in b.iter().enumerate() {
+            cur[j + 1] = (prev[j] + usize::from(ca != cb)).min(prev[j + 1] + 1).min(cur[j] + 1);
+        }
+        prev = cur;
+    }
+    prev[b.len()] * 4 <= a.len().max(b.len())
+}
+
 fn refine_narration(manifest: &mut Manifest) {
     let keywords = |s: &openscrib_core::Step| -> Vec<String> {
         let text = [s.vision.as_deref(), s.ocr.as_deref(), s.keys.as_deref()]
@@ -271,6 +344,20 @@ pub fn title_from(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_apps_from_windows() {
+        let w = |title: &str, process: &str| openscrib_core::WindowInfo {
+            rect: openscrib_core::Rect { x: 0, y: 0, w: 800, h: 600 },
+            client: None,
+            title: title.into(),
+            process: process.into(),
+        };
+        assert_eq!(app_name(&w("scales - BambuStudio", "bambu-studio.exe")), "BambuStudio");
+        assert_eq!(app_name(&w("", "bambu-studio.exe")), "Bambu Studio");
+        assert!(similar("Bamboo Studio", "BambuStudio"));
+        assert!(!similar("World coordinates", "BambuStudio"));
+    }
 
     #[test]
     fn titles_from_first_sentence() {
