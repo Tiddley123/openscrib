@@ -1,0 +1,6 @@
+/target
+*.scrib
+*.scrib.recording/
+*.scrib.tmp
+projects/
+models/
