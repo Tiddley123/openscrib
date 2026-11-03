@@ -3,13 +3,13 @@
 //! waits on compression.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use crossbeam_channel::{RecvTimeoutError, Sender, unbounded};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
 use image::RgbaImage;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use openscrib_core::project::SCREEN_FILE;
@@ -141,18 +141,7 @@ pub fn record(
         warn!("{w}");
     }
 
-    let (tx, rx) = unbounded::<TimedInput>();
-    thread::Builder::new().name("input-hook".into()).spawn(move || {
-        let res = rdev::listen(move |e| {
-            let t_ms = clock.now_ms();
-            if let Some(input) = convert(e) {
-                let _ = tx.send(TimedInput { t_ms, input });
-            }
-        });
-        if let Err(e) = res {
-            error!("input hook failed: {e:?}");
-        }
-    })?;
+    let rx = subscribe_input(clock)?;
 
     let writer = PngWriter::spawn(dir.clone());
     let cursor = platform::cursor_pos().unwrap_or(Point::new(0, 0));
@@ -179,6 +168,7 @@ pub fn record(
         session.tick(clock.now_ms())?;
     }
 
+    unsubscribe_input();
     let end_ms = clock.now_ms();
     // Cut both streams at the moment the user stopped, then let them wind
     // down in parallel while the step data is flushed.
@@ -232,9 +222,46 @@ pub fn record(
     }
     manifest.warnings.extend(warnings);
     dir.write_manifest(&manifest)?;
-    // The hook thread blocks inside the OS message loop for the life of the
-    // process; rdev offers no way to unhook, so it is left to exit with us.
     Ok(manifest)
+}
+
+/// The current recording's input sink. The OS hook is installed once per
+/// process (rdev cannot remove it), and each recording swaps in its own
+/// channel and clock here.
+static INPUT_SINK: Mutex<Option<(Sender<TimedInput>, Clock)>> = Mutex::new(None);
+static HOOK: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+
+fn subscribe_input(clock: Clock) -> Result<Receiver<TimedInput>> {
+    let (tx, rx) = unbounded::<TimedInput>();
+    *INPUT_SINK.lock().expect("input sink lock") = Some((tx, clock));
+    let started = HOOK.get_or_init(|| {
+        thread::Builder::new()
+            .name("input-hook".into())
+            .spawn(|| {
+                let res = rdev::listen(|e| {
+                    let guard = INPUT_SINK.lock().expect("input sink lock");
+                    if let Some((tx, clock)) = guard.as_ref() {
+                        let t_ms = clock.now_ms();
+                        if let Some(input) = convert(e) {
+                            let _ = tx.send(TimedInput { t_ms, input });
+                        }
+                    }
+                });
+                if let Err(e) = res {
+                    error!("input hook failed: {e:?}");
+                }
+                // Wake any recording waiting on input so it can report this.
+                INPUT_SINK.lock().expect("input sink lock").take();
+            })
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    });
+    started.clone().map_err(|e| anyhow::anyhow!("starting input hook: {e}"))?;
+    Ok(rx)
+}
+
+fn unsubscribe_input() {
+    INPUT_SINK.lock().expect("input sink lock").take();
 }
 
 fn convert(e: rdev::Event) -> Option<Input> {

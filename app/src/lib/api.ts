@@ -1,0 +1,133 @@
+// Types mirroring openscrib-core's manifest, and typed wrappers around the
+// Tauri commands in src-tauri/src/lib.rs.
+
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { inTauri, mockApi } from './mock'
+
+export type Point = { x: number; y: number }
+export type Rect = { x: number; y: number; w: number; h: number }
+
+export type Annotation =
+  | { type: 'marker'; at: Point }
+  | { type: 'arrow'; from: Point; to: Point }
+  | { type: 'box'; rect: Rect }
+  | { type: 'blur'; rect: Rect }
+
+export interface Click {
+  x: number
+  y: number
+  button: 'left' | 'right' | 'middle' | 'other'
+  double?: boolean
+  in_window?: Point
+  in_frame: Point
+}
+
+export interface WindowInfo {
+  rect: Rect
+  client?: Rect
+  title: string
+  process: string
+}
+
+export interface Clip {
+  start_ms: number
+  end_ms: number
+}
+
+export interface Step {
+  id: number
+  t_ms: number
+  kind: 'click' | 'typed' | 'shortcut'
+  click?: Click
+  keys?: string
+  monitor?: number
+  window?: WindowInfo
+  frame?: string
+  pre_frame?: string
+  transcript?: string
+  ocr?: string
+  vision?: string
+  text: string
+  text_edited: boolean
+  clip?: Clip
+  crop?: Rect
+  annotations: Annotation[]
+}
+
+export interface MonitorInfo {
+  id: number
+  name: string
+  rect: Rect
+  scale: number
+  primary: boolean
+}
+
+export interface Manifest {
+  version: number
+  app_version: string
+  title?: string
+  created: string
+  duration_ms: number
+  monitors: MonitorInfo[]
+  video?: { file: string; monitor: number; width: number; height: number; max_fps: number; frames: number; first_ms: number }
+  audio?: { file: string; device: string; device_rate: number; channels: number; first_ms: number }
+  steps: Step[]
+  warnings?: string[]
+}
+
+export interface ProjectView {
+  source: string
+  work_dir: string
+  manifest: Manifest
+  default_crops: (Rect | null)[]
+  frame_sizes: ([number, number] | null)[]
+  preview_video: string | null
+}
+
+export interface RecentItem {
+  path: string
+  name: string
+  title: string | null
+  steps: number
+  duration_ms: number
+  modified: number
+}
+
+export interface Devices {
+  monitors: MonitorInfo[]
+  mics: [string, boolean][]
+  video_available: boolean
+}
+
+export type ExportFormat = 'md' | 'html' | 'pdf' | 'mkv' | 'mp4'
+
+const dev = import.meta.env.DEV && !inTauri
+
+export const api = {
+  listRecordings: () => (dev ? mockApi.listRecordings() : invoke<RecentItem[]>('list_recordings')),
+  openProject: (path: string) => (dev ? mockApi.openProject() : invoke<ProjectView>('open_project', { path })),
+  saveProject: (manifest: Manifest) => invoke<void>('save_project', { manifest }),
+  exportProject: (req: { manifest: Manifest; formats: ExportFormat[]; out_dir: string; full_frame: boolean }) =>
+    invoke<void>('export_project', { req }),
+  startRecording: (req: { video: boolean; audio: boolean; monitor: number | null; mic: string | null }) =>
+    invoke<string>('start_recording', { req }),
+  stopRecording: () => invoke<void>('stop_recording'),
+  listDevices: () => (dev ? mockApi.listDevices() : invoke<Devices>('list_devices')),
+  defaultExportDir: () => (dev ? mockApi.defaultExportDir() : invoke<string>('default_export_dir')),
+}
+
+/** URL the WebView can load for a file inside the open project. */
+export function fileUrl(workDir: string, rel: string): string {
+  return localUrl(`${workDir}/${rel}`)
+}
+
+/** URL the WebView can load for an absolute local path. */
+export function localUrl(path: string): string {
+  return inTauri ? convertFileSrc(path) : path
+}
+
+export function formatTime(ms: number): string {
+  const s = Math.max(0, ms) / 1000
+  const m = Math.floor(s / 60)
+  return `${m}:${(s - m * 60).toFixed(1).padStart(4, '0')}`
+}

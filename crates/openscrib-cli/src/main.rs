@@ -34,6 +34,22 @@ enum Cmd {
     },
     /// Pack a working directory (e.g. one left by a crash) into a .scrib file.
     Pack { dir: PathBuf, out: PathBuf },
+    /// Export the guide (Markdown, HTML, PDF) and/or the video (MKV, MP4).
+    Export {
+        project: PathBuf,
+        /// Formats to write.
+        #[arg(short, long, value_delimiter = ',', default_value = "md,html,pdf")]
+        format: Vec<GuideFormat>,
+        /// Output folder. Defaults to `<project name>-export` beside the project.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Show the whole monitor instead of the clicked window.
+        #[arg(long)]
+        full_frame: bool,
+        /// Also render each PDF page to page-NN.png (for previews).
+        #[arg(long)]
+        pdf_pages: bool,
+    },
     /// List monitors and microphones.
     Devices,
     /// Read a project's screen.mkv back, decode every video frame, and
@@ -44,6 +60,15 @@ enum Cmd {
         #[arg(long)]
         frame: Option<PathBuf>,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum GuideFormat {
+    Md,
+    Html,
+    Pdf,
+    Mkv,
+    Mp4,
 }
 
 #[derive(Args)]
@@ -88,8 +113,9 @@ fn main() -> Result<()> {
 
     match Cli::parse().cmd {
         Cmd::Record(args) => record(args),
+        Cmd::Export { project, format, out, full_frame, pdf_pages } => export(&project, &format, out, full_frame, pdf_pages),
         Cmd::Devices => devices(),
-        Cmd::Probe { project, frame } => probe(&load(&project)?, frame.as_deref()),
+        Cmd::Probe { project, frame } => probe(&*load(&project)?, frame.as_deref()),
         Cmd::Info { project } => print_info(&load(&project)?.read_manifest()?),
         Cmd::Markers { project, out } => markers(&project, &out),
         Cmd::Pack { dir, out } => {
@@ -145,7 +171,7 @@ fn record(args: RecordArgs) -> Result<()> {
         });
     }
 
-    let cfg = SessionConfig { capture_keys: !no_keys };
+    let cfg = SessionConfig { capture_keys: !no_keys, ..Default::default() };
     let manifest = openscrib_capture::record(dir.clone(), cfg, media, stop)?;
     dir.pack(&out)?;
     if !keep_dir {
@@ -198,17 +224,29 @@ fn resolve_project(path: &Path) -> PathBuf {
 }
 
 /// Open a project from a directory, or unpack a .scrib into a temp dir.
-fn load(path: &Path) -> Result<ProjectDir> {
+/// A project opened for reading. A packed `.scrib` is unpacked into a temp
+/// folder that is deleted when this is dropped.
+struct Loaded {
+    dir: ProjectDir,
+    _tmp: Option<tempfile::TempDir>,
+}
+
+impl std::ops::Deref for Loaded {
+    type Target = ProjectDir;
+    fn deref(&self) -> &ProjectDir {
+        &self.dir
+    }
+}
+
+fn load(path: &Path) -> Result<Loaded> {
     let resolved = resolve_project(path);
     let path = resolved.as_path();
     if path.is_dir() {
-        return Ok(ProjectDir::open(path)?);
+        return Ok(Loaded { dir: ProjectDir::open(path)?, _tmp: None });
     }
-    let tmp = std::env::temp_dir().join(format!("openscrib-{}", std::process::id()));
-    if tmp.exists() {
-        fs::remove_dir_all(&tmp)?;
-    }
-    Ok(ProjectDir::unpack(path, tmp)?)
+    let tmp = tempfile::Builder::new().prefix("openscrib-").tempdir()?;
+    let dir = ProjectDir::unpack(path, tmp.path())?;
+    Ok(Loaded { dir, _tmp: Some(tmp) })
 }
 
 fn probe(dir: &ProjectDir, frame_out: Option<&Path>) -> Result<()> {
@@ -301,6 +339,91 @@ fn probe(dir: &ProjectDir, frame_out: Option<&Path>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn export(project: &Path, formats: &[GuideFormat], out: Option<PathBuf>, full_frame: bool, pdf_pages: bool) -> Result<()> {
+    use openscrib_export::{CropMode, Guide, RenderOptions};
+
+    let resolved = resolve_project(project);
+    let dir = load(&resolved)?;
+    let manifest = dir.read_manifest()?;
+    let out = out.unwrap_or_else(|| {
+        let stem = resolved.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "guide".into());
+        resolved.with_file_name(format!("{stem}-export"))
+    });
+    fs::create_dir_all(&out)?;
+
+    let opts = RenderOptions { crop: if full_frame { CropMode::Full } else { CropMode::Window }, ..Default::default() };
+    // Rendering step images is only needed for the document formats.
+    let mut guide_cache: Option<Guide> = None;
+    for f in formats {
+        let path = match f {
+            GuideFormat::Md => {
+                ensure_guide(&mut guide_cache, &dir, &manifest, &opts)?.write_markdown(&out)?;
+                out.join("guide.md")
+            }
+            GuideFormat::Html => {
+                let p = out.join("guide.html");
+                ensure_guide(&mut guide_cache, &dir, &manifest, &opts)?.write_html(&p)?;
+                p
+            }
+            GuideFormat::Mkv | GuideFormat::Mp4 => {
+                let dll = video::locate_openh264().context("video export needs the OpenH264 DLL")?;
+                let (fmt, name) = if *f == GuideFormat::Mkv {
+                    (openscrib_export::video::VideoFormat::Mkv, "guide.mkv")
+                } else {
+                    (openscrib_export::video::VideoFormat::Mp4, "guide.mp4")
+                };
+                let p = out.join(name);
+                let opts = openscrib_export::video::VideoExportOptions::new(dll, fmt);
+                let started = std::time::Instant::now();
+                let mut shown = 0;
+                let stats = openscrib_export::video::export_video(&dir, &manifest, &opts, &p, |k| {
+                    let pct = (k * 100.0) as u32;
+                    if pct >= shown + 10 {
+                        shown = pct;
+                        eprint!("\r  {name}: {pct}%   ");
+                    }
+                })?;
+                eprintln!();
+                info!(
+                    "{name}: {:.1}s, {} frames, {}x{}, {} segment(s) in {:.1}s",
+                    stats.duration_ms as f64 / 1000.0,
+                    stats.frames,
+                    stats.width,
+                    stats.height,
+                    stats.segments,
+                    started.elapsed().as_secs_f64()
+                );
+                p
+            }
+            GuideFormat::Pdf => {
+                let p = out.join("guide.pdf");
+                let g = ensure_guide(&mut guide_cache, &dir, &manifest, &opts)?;
+                g.write_pdf(&p)?;
+                if pdf_pages {
+                    for (i, png) in g.pdf_page_pngs(1.5)?.iter().enumerate() {
+                        fs::write(out.join(format!("page-{:02}.png", i + 1)), png)?;
+                    }
+                }
+                p
+            }
+        };
+        info!("wrote {}", path.display());
+    }
+    Ok(())
+}
+
+fn ensure_guide<'a>(
+    cache: &'a mut Option<openscrib_export::Guide>,
+    dir: &ProjectDir,
+    manifest: &Manifest,
+    opts: &openscrib_export::RenderOptions,
+) -> Result<&'a openscrib_export::Guide> {
+    if cache.is_none() {
+        *cache = Some(openscrib_export::Guide::build(dir, manifest, opts)?);
+    }
+    Ok(cache.as_ref().expect("just built"))
 }
 
 fn devices() -> Result<()> {

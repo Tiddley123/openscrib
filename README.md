@@ -7,6 +7,30 @@ remote sessions.
 
 The design is in [docs/outline.md](docs/outline.md).
 
+## The editor
+
+```bash
+cd app && npm install && npx tauri build --no-bundle
+```
+
+This builds `target/release/openscrib-app.exe`. From the editor you can record, open and save projects, and:
+
+- **Steps:** drag to reorder, delete, edit the text (with `**bold**` and `` `code` ``).
+- **Annotations:** draw arrows, boxes and markers, redact private areas (pixelated on export), or set a custom crop.
+- **Clips:** trim each step's video against a preview, or click **Auto**.
+- **Export:** PDF, HTML, Markdown, MP4 and MKV.
+
+For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on its own works in a plain browser too, against a mock backend fed from `app/dev-mock/`.
+
+## Status: M3 (editor and exports)
+
+- [x] Step images: window-aware crop (with limits on very wide or tall shapes), per-step crop override, annotations, and irreversible pixelation for redaction
+- [x] Markdown (folder of images), HTML (one self-contained file, light and dark), PDF (Typst, compiled in-process, works offline)
+- [x] Video export: step clips stitched in step order (or the whole recording), drawn cursor and click ripples, scaled to 1920 px wide, narration copied as-is. MKV, or MP4 with the index at the front (checked with Mozilla's `mp4parse`)
+- [x] Tauri 2 + Svelte 5 editor covering everything above, plus recording from the app (clicks on the editor itself are ignored)
+- [ ] Undo/redo, moving existing annotations, adding text-only steps
+- [ ] Cursor shape is a generic arrow; the real cursor (I-beam, hand) isn't captured yet
+
 ## Status: M1 (capture core, Windows)
 
 - [x] Global mouse and keyboard hooks (`rdev`), per-monitor DPI aware
@@ -74,9 +98,10 @@ the unpacked working directory. If a recording crashes, run
 | --- | --- |
 | `openscrib-core` | Clock, `project.json` schema, `.scrib` pack and unpack, click markers. Has no OS dependencies. |
 | `openscrib-capture` | Input hooks, screen capture, window lookup, and the `Session` step state machine |
-| `openscrib-cli` | The `openscrib` binary |
+| `openscrib-export` | Step image rendering, Markdown/HTML/PDF guides, video export, MP4 remux |
+| `openscrib-cli` | The `openscrib` binary (`record`, `export`, `info`, `probe`, `markers`, `pack`, `devices`) |
+| `app/` | Tauri 2 + Svelte 5 editor (`app/src-tauri` is the Rust side) |
 
-The Tauri editor app arrives with M3 and builds on `core` and `capture`.
 
 ## Licence
 

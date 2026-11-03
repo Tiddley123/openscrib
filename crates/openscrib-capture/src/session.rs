@@ -59,11 +59,14 @@ pub trait FrameSink {
 pub struct SessionConfig {
     /// When false, typed characters are recorded as `•` and not logged.
     pub capture_keys: bool,
+    /// Executable whose windows are never recorded (the editor itself), so
+    /// pressing its Stop button doesn't become a step.
+    pub ignore_process: Option<String>,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
-        Self { capture_keys: true }
+        Self { capture_keys: true, ignore_process: None }
     }
 }
 
@@ -217,9 +220,13 @@ impl<C: Capture, S: FrameSink> Session<C, S> {
             return self.save_manifest();
         }
 
+        let window = self.cap.window_at(at);
+        if self.ignored(&window) {
+            return Ok(());
+        }
         let id = self.take_id();
         let mut step = Step::new(id, t, StepKind::Click);
-        step.window = self.cap.window_at(at);
+        step.window = window;
         let origin = self.attach_frame(&mut step, at);
         step.click = Some(Click {
             x: at.x,
@@ -318,10 +325,14 @@ impl<C: Capture, S: FrameSink> Session<C, S> {
         }
         combo.push(key_label(key));
 
+        let window = self.cap.foreground();
+        if self.ignored(&window) {
+            return Ok(());
+        }
         let id = self.take_id();
         let mut step = Step::new(id, t, StepKind::Shortcut);
         step.keys = Some(combo.join("+"));
-        step.window = self.cap.foreground();
+        step.window = window;
         let at = step.window.as_ref().map(centre).unwrap_or(self.cursor);
         self.attach_frame(&mut step, at);
         self.push(step)
@@ -329,6 +340,9 @@ impl<C: Capture, S: FrameSink> Session<C, S> {
 
     fn flush_burst(&mut self) -> Result<()> {
         let Some(b) = self.burst.take() else { return Ok(()) };
+        if self.ignored(&b.window) {
+            return Ok(());
+        }
         let id = self.take_id();
         let mut step = Step::new(id, b.start_ms, StepKind::Typed);
         step.keys = Some(b.text);
@@ -383,6 +397,13 @@ impl<C: Capture, S: FrameSink> Session<C, S> {
         self.events.flush()?;
         self.dir.write_manifest(&self.manifest)?;
         Ok(())
+    }
+
+    fn ignored(&self, window: &Option<WindowInfo>) -> bool {
+        match (&self.cfg.ignore_process, window) {
+            (Some(own), Some(w)) => w.process.eq_ignore_ascii_case(own),
+            _ => false,
+        }
     }
 
     fn take_id(&mut self) -> u32 {
@@ -642,7 +663,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = ProjectDir::create(tmp.path()).unwrap();
         let mut saved = Saved::default();
-        let cfg = SessionConfig { capture_keys: false };
+        let cfg = SessionConfig { capture_keys: false, ..Default::default() };
         let mut s = Session::new(dir.clone(), cfg, FakeCapture, &mut saved, vec![], Point::new(0, 0)).unwrap();
         s.handle(key(0, Key::KeyP, "p")).unwrap();
         s.handle(key(10, Key::KeyW, "w")).unwrap();
@@ -650,6 +671,21 @@ mod tests {
         assert_eq!(m.steps[0].keys.as_deref(), Some("••"));
         let log = std::fs::read_to_string(dir.path("events.jsonl")).unwrap();
         assert!(!log.contains("KeyP"));
+    }
+
+    #[test]
+    fn own_windows_are_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = ProjectDir::create(tmp.path()).unwrap();
+        let mut saved = Saved::default();
+        // The fake reports every window as TeamViewer.exe.
+        let cfg = SessionConfig { ignore_process: Some("teamviewer.EXE".into()), ..Default::default() };
+        let mut s = Session::new(dir, cfg, FakeCapture, &mut saved, vec![], Point::new(0, 0)).unwrap();
+        s.handle(ev(0, Input::Press(MouseButton::Left))).unwrap();
+        s.handle(key(100, Key::KeyA, "a")).unwrap();
+        let m = s.finish(200).unwrap();
+        assert!(m.steps.is_empty());
+        assert!(saved.0.is_empty());
     }
 
     #[test]

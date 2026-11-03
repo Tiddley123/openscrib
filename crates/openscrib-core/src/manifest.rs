@@ -154,6 +154,10 @@ pub struct Step {
     pub text_edited: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clip: Option<Clip>,
+    /// Region of the frame to show in exported guides; `None` uses the
+    /// export default (usually the target window).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<Rect>,
     #[serde(default)]
     pub annotations: Vec<Annotation>,
 }
@@ -176,6 +180,7 @@ impl Step {
             text: String::new(),
             text_edited: false,
             clip: None,
+            crop: None,
             annotations: Vec::new(),
         }
     }
@@ -242,6 +247,8 @@ pub struct AudioTrack {
 pub struct Manifest {
     pub version: u32,
     pub app_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created: OffsetDateTime,
     pub duration_ms: u64,
@@ -260,6 +267,7 @@ impl Manifest {
         Self {
             version: MANIFEST_VERSION,
             app_version: app_version.into(),
+            title: None,
             created: OffsetDateTime::now_utc(),
             duration_ms: 0,
             monitors: Vec::new(),

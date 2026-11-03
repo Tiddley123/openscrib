@@ -1,0 +1,130 @@
+:root {
+  --bg: #f6f5f3;
+  --panel: #ffffff;
+  --panel-2: #fbfaf9;
+  --ink: #1c1c1e;
+  --ink-2: #4a4a4f;
+  --muted: #8a8a90;
+  --line: #e7e5e2;
+  --line-strong: #d6d3cf;
+  --accent: #ff5c35;
+  --accent-ink: #ffffff;
+  --accent-soft: #fff0eb;
+  --danger: #d93f3f;
+  --focus: 0 0 0 3px rgba(255, 92, 53, 0.25);
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+  font-family: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--bg);
+  color-scheme: light dark;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111113;
+    --panel: #19191c;
+    --panel-2: #1e1e22;
+    --ink: #f2f2f3;
+    --ink-2: #c4c4c9;
+    --muted: #85858c;
+    --line: #2a2a2f;
+    --line-strong: #37373d;
+    --accent-soft: #3a1f17;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.3);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.12s, border-color 0.12s;
+}
+button:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--muted);
+}
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+button.primary:hover:not(:disabled) {
+  background: #f04e28;
+  border-color: #f04e28;
+}
+button.ghost {
+  border-color: transparent;
+  background: transparent;
+}
+button.ghost:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+button.danger {
+  color: var(--danger);
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+}
+
+.label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+kbd {
+  font: 12px ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: var(--panel-2);
+}

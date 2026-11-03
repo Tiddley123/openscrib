@@ -6,3 +6,4 @@ projects/
 models/
 runtime/
 .cargo/config.toml
+.claude/
