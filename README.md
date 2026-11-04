@@ -28,7 +28,7 @@ This builds `target/release/openscrib-app.exe`. From the editor you can record, 
 For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on its own works in a plain browser too, against a mock backend fed from `app/dev-mock/`.
 
 ## Status: M7+ (Future Ideas, Omega polish...)
-- [ ] Chain multiple projects together to form full workflows with logic. Unsure if to pursue in powerpoint or html. PDF is out of the question.
+- [ ] Chain multiple projects together to form full workflows with logic. Unsure if to pursue in powerpoint or html. PDF is out of the question for these...
 - [ ] In HTML variants of documents, have the ability to render out short clips/ micro videos (AVIF or A-WEBP) to show animations or actions that cannot be explained by a single click or keystroke.
 
 
