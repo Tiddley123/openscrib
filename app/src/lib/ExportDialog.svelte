@@ -3,7 +3,7 @@
   import { open as openDialog } from '@tauri-apps/plugin-dialog'
   import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
   import { onMount } from 'svelte'
-  import { api, type ExportFormat, type Manifest } from './api'
+  import { api, formatBytes, type ExportFormat, type Manifest } from './api'
   import { qualityLabel, settings } from './settings.svelte'
 
   let { manifest, hasVideo, onclose, onsaved }: {
@@ -33,7 +33,30 @@
   let error = $state<string | null>(null)
 
   let selected = $derived(formats.filter((f) => chosen[f.id] && (!f.video || hasVideo)).map((f) => f.id))
-  let clipCount = $derived(manifest.steps.filter((s) => s.clip).length)
+  let clipCount = $derived(manifest.steps.filter((s) => s.clip && !s.deleted).length)
+  let deletedCount = $derived(manifest.steps.filter((s) => s.deleted).length)
+
+  // Sizes depend on the crop, so they are redone when that changes. Only the
+  // latest answer counts: an older one may arrive after it.
+  let sizes = $state<Record<string, number> | null>(null)
+  let estimate = 0
+  $effect(() => {
+    const full_frame = fullFrame
+    const ticket = ++estimate
+    sizes = null
+    api
+      .estimateExport({
+        manifest: $state.snapshot(manifest),
+        full_frame,
+        quality: settings.quality,
+        max_width: settings.exportWidth,
+        pdf_quality: settings.pdfQuality,
+      })
+      .then((s) => {
+        if (ticket === estimate) sizes = s
+      })
+      .catch(() => {})
+  })
 
   onMount(() => {
     // Voiceover needs either a voice built into the system or Piper and one
@@ -81,6 +104,7 @@
         full_frame: fullFrame,
         quality: settings.quality,
         max_width: settings.exportWidth,
+        pdf_quality: settings.pdfQuality,
         voiceover: voiceover && voiceReady ? settings.voice : null,
       })
       // Exporting saves the project first.
@@ -109,6 +133,11 @@
           <input type="checkbox" bind:checked={chosen[f.id]} disabled={disabled || running} />
           <span class="name">{f.label}</span>
           <span class="note">{disabled ? 'No screen video in this recording' : f.note}</span>
+          <span class="size">
+            {#if !disabled}
+              {#if sizes === null}…{:else if sizes[f.id] !== undefined}{f.video ? '~' : ''}{formatBytes(sizes[f.id])}{/if}
+            {/if}
+          </span>
           {#if progress[f.id] !== undefined}
             <span class="bar"><span style:width="{Math.round(progress[f.id] * 100)}%"></span></span>
           {/if}
@@ -131,7 +160,8 @@
         <p class="note-line">
           {clipCount > 0
             ? `Video: ${clipCount} step clip${clipCount > 1 ? 's' : ''} stitched in step order.`
-            : 'Video: the whole recording (set clips on steps to trim it).'}
+            : `Video: the whole recording${deletedCount ? ', including deleted steps' : ''} (set clips on steps to trim it).`}
+          {manifest.video_crop ? `Cropped to ${manifest.video_crop.w} × ${manifest.video_crop.h}.` : ''}
           Quality {settings.quality} ({qualityLabel(settings.quality)}), {settings.exportWidth
             ? `up to ${settings.exportWidth} px wide`
             : 'original size'}; change these in Settings.
@@ -197,7 +227,7 @@
   }
   .fmt {
     display: grid;
-    grid-template-columns: 20px 90px 1fr;
+    grid-template-columns: 20px 90px 1fr auto;
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
@@ -223,6 +253,11 @@
   .note {
     color: var(--muted);
     font-size: 12.5px;
+  }
+  .size {
+    color: var(--muted);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
   }
   .bar {
     position: absolute;

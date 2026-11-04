@@ -2,6 +2,7 @@
 //! projects, runs recordings and exports, and hands the WebView file paths
 //! it can load through the asset protocol.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +15,7 @@ use openscrib_capture::{MediaConfig, SessionConfig};
 use openscrib_core::project::{SCREEN_FILE, read_packed_manifest};
 use openscrib_core::{Manifest, PROJECT_EXT, ProjectDir, Rect};
 use openscrib_export::render::{CropMode, RenderOptions, default_crop};
-use openscrib_export::video::{VideoExportOptions, VideoFormat, export_video, remux_to_mp4};
+use openscrib_export::video::{VideoExportOptions, VideoFormat, estimate_size, export_video, remux_to_mp4};
 use openscrib_export::voiceover;
 use openscrib_export::Guide;
 use openscrib_process::{ProcessOptions, models};
@@ -100,7 +101,7 @@ fn list_recordings() -> CmdResult<Vec<RecentItem>> {
             name: path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
             path: path.to_string_lossy().into_owned(),
             title: m.title.clone(),
-            steps: m.steps.len(),
+            steps: m.steps.iter().filter(|s| !s.deleted).count(),
             duration_ms: m.duration_ms,
             modified,
         });
@@ -184,6 +185,9 @@ struct ExportRequest {
     quality: u8,
     /// 0 keeps the recording's own width.
     max_width: u32,
+    /// Screenshot quality in the PDF, 1..=100.
+    #[serde(default = "default_pdf_quality")]
+    pdf_quality: u8,
     /// Voice to read the steps aloud with, replacing the narration: a Piper
     /// voice id, or a macOS voice name. `None` keeps the narration.
     #[serde(default)]
@@ -224,6 +228,45 @@ fn export_project(app: AppHandle, state: State<AppState>, req: ExportRequest) ->
     Ok(())
 }
 
+fn default_pdf_quality() -> u8 {
+    openscrib_export::pdf::DEFAULT_QUALITY
+}
+
+#[derive(Deserialize)]
+struct EstimateRequest {
+    manifest: Manifest,
+    full_frame: bool,
+    quality: u8,
+    max_width: u32,
+    pdf_quality: u8,
+}
+
+/// Bytes each format would take, by format id. Guides are built for real, so
+/// those are close to exact; the video is an estimate, and absent when the
+/// recording has no video.
+#[tauri::command]
+async fn estimate_export(state: State<'_, AppState>, req: EstimateRequest) -> CmdResult<HashMap<String, u64>> {
+    let dir = with_project(&state, |p| Ok(p.dir.clone()))?;
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<HashMap<String, u64>> {
+        let crop = if req.full_frame { CropMode::Full } else { CropMode::Window };
+        let guide = Guide::build(&dir, &req.manifest, &RenderOptions { crop, ..Default::default() })?;
+        let mut sizes = HashMap::from([
+            ("pdf".to_string(), guide.to_pdf(req.pdf_quality.clamp(1, 100))?.len() as u64),
+            ("html".to_string(), guide.to_html().len() as u64),
+            ("md".to_string(), guide.markdown_size()),
+        ]);
+        let width = if req.max_width == 0 { u32::MAX } else { req.max_width };
+        if let Some(bytes) = estimate_size(&dir, &req.manifest, req.quality.clamp(1, 100), width) {
+            sizes.insert("mp4".to_string(), bytes);
+            sizes.insert("mkv".to_string(), bytes);
+        }
+        Ok(sizes)
+    })
+    .await
+    .map_err(err)?
+    .map_err(err)
+}
+
 fn run_export(app: &AppHandle, dir: &ProjectDir, req: ExportRequest) -> anyhow::Result<ExportDone> {
     let out = PathBuf::from(&req.out_dir);
     fs::create_dir_all(&out)?;
@@ -256,7 +299,7 @@ fn run_export(app: &AppHandle, dir: &ProjectDir, req: ExportRequest) -> anyhow::
                     }
                     _ => {
                         let p = out.join(format!("{stem}.pdf"));
-                        g.write_pdf(&p)?;
+                        g.write_pdf(&p, req.pdf_quality.clamp(1, 100))?;
                         p
                     }
                 }
@@ -404,6 +447,11 @@ struct ModelStatus {
 /// user's own default voice in place.
 #[cfg(not(target_os = "macos"))]
 fn pick_voice(id: &str) -> anyhow::Result<voiceover::Voice> {
+    // Anything that isn't a download is a voice Windows already has.
+    #[cfg(windows)]
+    if models::find(id).is_none() {
+        return Ok(voiceover::Voice::system(Some(id)));
+    }
     let (exe, model) = models::tts_paths(Some(id))
         .ok_or_else(|| anyhow::anyhow!("voiceover needs the Piper engine and a voice (Settings -> Models)"))?;
     Ok(voiceover::Voice::Piper { exe, model })
@@ -623,6 +671,7 @@ pub fn run() {
             default_export_dir,
             list_models,
             list_voices,
+            estimate_export,
             download_model,
             remove_model,
             process_project,

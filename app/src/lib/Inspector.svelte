@@ -1,14 +1,17 @@
 <script lang="ts">
-  import { api, formatTime, localUrl, syncTranscripts, type Callout, type Manifest, type NarrationSegment, type Step } from './api'
+  import { api, formatTime, localUrl, stepNumbers, syncTranscripts, type Callout, type Manifest, type NarrationSegment, type Step } from './api'
 
-  let { step = $bindable(), manifest = $bindable(), number, previewVideo, duration, nextT, ondelete }: {
+  let { step = $bindable(), manifest = $bindable(), number, previewVideo, duration, nextT, ondelete, onrestore, onremove }: {
     step: Step
     manifest: Manifest
-    number: number
+    /** `null` for a deleted step. */
+    number: number | null
     previewVideo: string | null
     duration: number
     nextT: number | null
     ondelete: () => void
+    onrestore: () => void
+    onremove: () => void
   } = $props()
 
   let video = $state<HTMLVideoElement | null>(null)
@@ -104,7 +107,9 @@
 
   // Narration: every transcribed segment, attachable to any step.
   let mine = $derived((manifest.narration ?? []).filter((n) => n.step === step.id).length)
-  const stepNumber = (id: number) => manifest.steps.findIndex((s) => s.id === id) + 1
+  let numbers = $derived(stepNumbers(manifest.steps))
+  // What the click landed on, whichever way it was worked out.
+  let clicked = $derived(step.vision ?? step.ocr)
 
   async function toggleNarration(n: NarrationSegment) {
     n.step = n.step === step.id ? undefined : step.id
@@ -119,7 +124,7 @@
 <aside>
   <div class="section">
     <div class="row">
-      <span class="label">Step {number}</span>
+      <span class="label">{number === null ? 'Deleted step' : `Step ${number}`}</span>
       <span class="chip">{kinds[step.kind]}</span>
     </div>
     <textarea
@@ -159,7 +164,7 @@
       </div>
       <ul class="narr">
         {#each manifest.narration as n}
-          {@const owner = n.step !== undefined && n.step !== step.id ? stepNumber(n.step) || null : null}
+          {@const owner = n.step !== undefined && n.step !== step.id ? numbers.get(n.step) ?? null : null}
           <li class:mine={n.step === step.id}>
             <span class="time">{formatTime(n.start_ms)}</span>
             <span class="said">{n.text}</span>
@@ -173,7 +178,7 @@
     </div>
   {/if}
 
-  {#if step.transcript || step.ocr || step.tooltip}
+  {#if step.transcript || clicked || step.tooltip}
     <div class="section">
       <div class="label">Context</div>
       <dl class="context">
@@ -184,11 +189,11 @@
             <button class="ghost small" onclick={() => useText(sentence(step.transcript!))}>Use</button>
           </dd>
         {/if}
-        {#if step.ocr}
+        {#if clicked}
           <dt>Clicked on</dt>
           <dd>
-            <span><b>{step.ocr}</b></span>
-            <button class="ghost small" onclick={() => useText(`${verb()} **${step.ocr}**.`)}>Use</button>
+            <span><b>{clicked}</b></span>
+            <button class="ghost small" onclick={() => useText(`${verb()} **${clicked}**.`)}>Use</button>
           </dd>
         {/if}
         {#if step.tooltip}
@@ -290,7 +295,18 @@
   </div>
 
   <div class="section">
-    <button class="danger" onclick={ondelete}>Delete step</button>
+    {#if step.deleted}
+      <div class="buttons">
+        <button onclick={onrestore}>Restore step</button>
+        <button
+          class="danger"
+          title="Take it out of this list too. Redactions on it go with it."
+          onclick={() => confirm('Remove this step for good? Its redactions go with it, and this moment of the video can no longer be redacted from it.') && onremove()}
+        >Remove for good</button>
+      </div>
+    {:else}
+      <button class="danger" onclick={ondelete}>Delete step</button>
+    {/if}
   </div>
 </aside>
 

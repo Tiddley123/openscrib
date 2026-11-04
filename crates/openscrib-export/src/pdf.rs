@@ -8,6 +8,8 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use anyhow::{Result, anyhow};
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::{self, FilterType};
 use typst::diag::{FileError, FileResult};
 use typst::foundations::{Bytes, Datetime, Duration};
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
@@ -17,7 +19,7 @@ use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
 use typst_kit::fonts::{self, FontStore};
 
-use crate::guide::{Guide, inline_typst, typst_str};
+use crate::guide::{Guide, GuideImage, inline_typst, typst_str};
 use crate::icons::callout_style;
 use openscrib_core::Callout;
 
@@ -25,6 +27,13 @@ use openscrib_core::Callout;
 const CONTENT_W_MM: f32 = 174.0;
 /// Tallest an image may be so a step (badge + text + image) fits one page.
 const MAX_IMG_H_MM: f32 = 175.0;
+/// Image quality that keeps screenshots lossless.
+pub const LOSSLESS: u8 = 100;
+pub const DEFAULT_QUALITY: u8 = 85;
+/// Image width in pixels at quality `q` is `MIN_IMG_W + PX_PER_QUALITY * q`:
+/// about 130 dpi on the page at the bottom of the scale, 200 dpi near the top.
+const MIN_IMG_W: u32 = 900;
+const PX_PER_QUALITY: u32 = 5;
 
 static FONTS: OnceLock<FontStore> = OnceLock::new();
 
@@ -37,16 +46,38 @@ fn font_store() -> &'static FontStore {
     })
 }
 
+/// An image as the PDF stores it. At 100 it stays a lossless PNG; below that
+/// it is scaled for the page and saved as a JPEG of that quality.
+fn pdf_image(img: &GuideImage, quality: u8) -> Result<Vec<u8>> {
+    if quality >= LOSSLESS {
+        return Ok(img.png.clone());
+    }
+    let rgba = image::load_from_memory(&img.png)?.to_rgba8();
+    let width = (MIN_IMG_W + PX_PER_QUALITY * quality as u32).min(rgba.width());
+    let height = (rgba.height() as u64 * width as u64 / rgba.width() as u64).max(1) as u32;
+    let scaled = if width < rgba.width() { imageops::resize(&rgba, width, height, FilterType::Triangle) } else { rgba };
+    let rgb = image::DynamicImage::ImageRgba8(scaled).to_rgb8();
+    let mut jpeg = Vec::new();
+    JpegEncoder::new_with_quality(&mut jpeg, quality.max(1)).encode_image(&rgb)?;
+    Ok(jpeg)
+}
+
+fn pdf_image_name(number: usize, quality: u8) -> String {
+    let name = Guide::image_name(number);
+    if quality >= LOSSLESS { name } else { name.replace(".png", ".jpg") }
+}
+
 impl Guide {
-    pub fn write_pdf(&self, out_file: &Path) -> Result<()> {
-        fs::write(out_file, self.to_pdf()?)?;
+    /// `quality` is 1..=100 for the screenshots, see [`pdf_image`].
+    pub fn write_pdf(&self, out_file: &Path, quality: u8) -> Result<()> {
+        fs::write(out_file, self.to_pdf(quality)?)?;
         Ok(())
     }
 
     /// Render each PDF page to a PNG, e.g. for previews. `pixel_per_pt` 2.0
     /// is roughly 144 dpi.
-    pub fn pdf_page_pngs(&self, pixel_per_pt: f64) -> Result<Vec<Vec<u8>>> {
-        let doc = self.layout()?;
+    pub fn pdf_page_pngs(&self, pixel_per_pt: f64, quality: u8) -> Result<Vec<Vec<u8>>> {
+        let doc = self.layout(quality)?;
         let opts = typst_render::RenderOptions { pixel_per_pt: pixel_per_pt.into(), ..Default::default() };
         doc.pages()
             .iter()
@@ -54,14 +85,14 @@ impl Guide {
             .collect()
     }
 
-    fn layout(&self) -> Result<PagedDocument> {
+    fn layout(&self, quality: u8) -> Result<PagedDocument> {
         let mut files = HashMap::new();
         for s in &self.steps {
             if let Some(img) = &s.image {
-                files.insert(Self::image_name(s.number), Bytes::new(img.png.clone()));
+                files.insert(pdf_image_name(s.number, quality), Bytes::new(pdf_image(img, quality)?));
             }
         }
-        let world = GuideWorld::new(self.typst_source(), files);
+        let world = GuideWorld::new(self.typst_source(quality), files);
         typst::compile(&world).output.map_err(|errs| {
             anyhow!(
                 "PDF layout failed: {}",
@@ -70,8 +101,8 @@ impl Guide {
         })
     }
 
-    pub fn to_pdf(&self) -> Result<Vec<u8>> {
-        let doc = self.layout()?;
+    pub fn to_pdf(&self, quality: u8) -> Result<Vec<u8>> {
+        let doc = self.layout(quality)?;
         typst_pdf::pdf(&doc, &typst_pdf::PdfOptions::default()).map_err(|errs| {
             anyhow!(
                 "PDF export failed: {}",
@@ -80,7 +111,7 @@ impl Guide {
         })
     }
 
-    pub fn typst_source(&self) -> String {
+    pub fn typst_source(&self, quality: u8) -> String {
         let mut src = format!(
             r##"#set document(title: {title})
 #set page(paper: "a4", margin: (x: 18mm, top: 16mm, bottom: 18mm),
@@ -108,7 +139,7 @@ impl Guide {
                 };
                 format!(
                     "#v(8pt)\n  #box(stroke: 0.5pt + luma(215), radius: 4pt, clip: true, image({}, {size}))\n",
-                    typst_str(&Self::image_name(s.number))
+                    typst_str(&pdf_image_name(s.number, quality))
                 )
             });
             let badge = format!(
@@ -234,8 +265,27 @@ mod tests {
                 GuideStep { number: 3, text: "Tall".into(), image: Some(GuideImage { png, width: 400, height: 1400 }), callout: None },
             ],
         };
-        let pdf = guide.to_pdf().unwrap();
+        let pdf = guide.to_pdf(LOSSLESS).unwrap();
         assert!(pdf.starts_with(b"%PDF-"));
         assert!(pdf.len() > 1000);
+    }
+
+    #[test]
+    fn lower_quality_means_a_smaller_pdf() {
+        // Busy like a screenshot, so PNG can't flatten it to nothing.
+        let shot = image::RgbaImage::from_fn(2000, 1200, |x, y| {
+            let n = x.wrapping_mul(31) ^ y.wrapping_mul(17) ^ (x * y);
+            image::Rgba([n as u8, (n >> 3) as u8, (x / 8) as u8, 255])
+        });
+        let mut png = Vec::new();
+        shot.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let image = GuideImage { png, width: 2000, height: 1200 };
+        let guide = Guide {
+            title: "Sizes".into(),
+            accent: "#0a84ff".into(),
+            steps: vec![GuideStep { number: 1, text: "Click.".into(), image: Some(image), callout: None }],
+        };
+        let sizes: Vec<usize> = [20, 85, LOSSLESS].iter().map(|&q| guide.to_pdf(q).unwrap().len()).collect();
+        assert!(sizes[0] < sizes[1] && sizes[1] < sizes[2], "{sizes:?}");
     }
 }

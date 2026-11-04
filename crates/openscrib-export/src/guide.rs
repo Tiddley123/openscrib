@@ -41,7 +41,7 @@ pub struct Guide {
 impl Guide {
     pub fn build(dir: &ProjectDir, manifest: &Manifest, opts: &RenderOptions) -> Result<Self> {
         let mut steps = Vec::with_capacity(manifest.steps.len());
-        for (i, step) in manifest.steps.iter().enumerate() {
+        for (i, step) in manifest.steps.iter().filter(|s| !s.deleted).enumerate() {
             let image = match render_step(dir, manifest, step, opts)? {
                 Some(img) => {
                     let mut png = Vec::new();
@@ -86,6 +86,18 @@ impl Guide {
     /// One HTML file with the images embedded, so it can be emailed or
     /// dropped on an intranet as-is.
     pub fn write_html(&self, out_file: &Path) -> Result<()> {
+        fs::write(out_file, self.to_html()).with_context(|| format!("writing {}", out_file.display()))?;
+        Ok(())
+    }
+
+    /// What [`Self::write_markdown`] writes, in bytes.
+    pub fn markdown_size(&self) -> u64 {
+        let text: usize = self.steps.iter().map(|s| s.text.len() + 40).sum();
+        let images: usize = self.steps.iter().filter_map(|s| s.image.as_ref()).map(|i| i.png.len()).sum();
+        (self.title.len() + text + images) as u64
+    }
+
+    pub fn to_html(&self) -> String {
         let b64 = base64::engine::general_purpose::STANDARD;
         let mut body = String::new();
         for s in &self.steps {
@@ -114,13 +126,11 @@ impl Guide {
             body.push_str("</li>\n");
         }
         let title = escape(&self.title);
-        let html = HTML_TEMPLATE
+        HTML_TEMPLATE
             .replace("{{accent}}", &escape(&self.accent))
             .replace("{{title}}", &title)
             .replace("{{count}}", &format!("{} step{}", self.steps.len(), if self.steps.len() == 1 { "" } else { "s" }))
-            .replace("{{steps}}", &body);
-        fs::write(out_file, html).with_context(|| format!("writing {}", out_file.display()))?;
-        Ok(())
+            .replace("{{steps}}", &body)
     }
 }
 
@@ -233,6 +243,23 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openscrib_core::{Step, StepKind};
+
+    #[test]
+    fn deleted_steps_are_skipped_and_not_counted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = ProjectDir::create(tmp.path().join("p")).unwrap();
+        let mut m = Manifest::new("t");
+        for (id, text) in [(1, "One"), (2, "Gone"), (3, "Three")] {
+            let mut s = Step::new(id, 0, StepKind::Note);
+            s.text = text.into();
+            s.deleted = id == 2;
+            m.steps.push(s);
+        }
+        let g = Guide::build(&dir, &m, &RenderOptions::default()).unwrap();
+        let got: Vec<_> = g.steps.iter().map(|s| (s.number, s.text.as_str())).collect();
+        assert_eq!(got, [(1, "One"), (2, "Three")]);
+    }
 
     #[test]
     fn inline_markdown_to_html() {

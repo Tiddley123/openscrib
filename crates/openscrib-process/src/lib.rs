@@ -82,7 +82,9 @@ pub fn process(
                 say("narration", 0.1, format!("Transcribing {:.0}s of narration", narration.duration_ms() as f64 / 1000.0));
                 let segments = transcribe::transcribe(model, &narration, opts.english_only)?;
                 report.segments = segments.len();
-                let times: Vec<u64> = manifest.steps.iter().map(|s| s.t_ms).collect();
+                // Deleted steps get no narration: it would vanish with them.
+                let live: Vec<_> = manifest.steps.iter().filter(|s| !s.deleted).map(|s| (s.id, s.t_ms)).collect();
+                let times: Vec<u64> = live.iter().map(|&(_, t)| t).collect();
                 let owners = transcribe::assign(&times, &segments);
                 manifest.narration = segments
                     .into_iter()
@@ -91,7 +93,7 @@ pub fn process(
                         start_ms: s.start_ms,
                         end_ms: s.end_ms,
                         text: s.text,
-                        step: owner.map(|i| manifest.steps[i].id),
+                        step: owner.map(|i| live[i].0),
                     })
                     .collect();
                 manifest.sync_transcripts();
@@ -110,7 +112,9 @@ pub fn process(
         let total = manifest.steps.len().max(1);
         for (i, step) in manifest.steps.iter_mut().enumerate() {
             say("ocr", i as f32 / total as f32, format!("Reading step {} of {}", i + 1, total));
-            let (StepKind::Click, Some(click), Some(frame)) = (step.kind, &step.click, &step.frame) else { continue };
+            let (StepKind::Click, Some(click), Some(frame), false) = (step.kind, &step.click, &step.frame, step.deleted) else {
+                continue;
+            };
             let img = image::open(dir.path(frame)).with_context(|| format!("reading {frame}"))?.to_rgba8();
             step.ocr = engine.label_at(&img, click.in_frame)?;
             report.labels += step.ocr.is_some() as usize;
@@ -153,7 +157,10 @@ pub fn process(
             for (i, step) in manifest.steps.iter_mut().enumerate() {
                 say("vision", i as f32 / total as f32, format!("Looking at step {}", i + 1));
                 step.vision = None;
-                let (StepKind::Click, Some(click), Some(frame)) = (step.kind, &step.click, &step.frame) else { continue };
+                let (StepKind::Click, Some(click), Some(frame), false) = (step.kind, &step.click, &step.frame, step.deleted)
+                else {
+                    continue;
+                };
                 let img = image::open(dir.path(frame)).with_context(|| format!("reading {frame}"))?.to_rgba8();
                 vision::click_crop(&img, click, &crop)?;
                 let answer = vision.ask(&vision::identify_prompt(step), Some(&crop), 24)?;
@@ -173,7 +180,7 @@ pub fn process(
                 // The draft (action + name) is already right; only narration
                 // adds something a small model can't make up.
                 step.refresh_text();
-                if step.text_edited || step.transcript.is_none() {
+                if step.text_edited || step.deleted || step.transcript.is_none() {
                     continue;
                 }
                 let draft = step.draft_text();
@@ -181,12 +188,12 @@ pub fn process(
                 let said = step.transcript.clone().unwrap_or_default();
                 step.text = match vision::clean_reply(&answer, 300) {
                     Some(text) if vision::accept_polish(&draft, &said, &text) => text,
-                    _ if step.kind == StepKind::Note => openscrib_core::sentence(&said),
+                    _ if step.kind == StepKind::Note || step.narration_leads() => openscrib_core::sentence(&said),
                     _ => vision::combine(&draft, &said),
                 };
             }
             if report.titled || manifest.title.as_deref().is_none_or(|t| t.trim().is_empty()) {
-                let steps: Vec<String> = manifest.steps.iter().map(|s| s.text.clone()).collect();
+                let steps: Vec<String> = manifest.steps.iter().filter(|s| !s.deleted).map(|s| s.text.clone()).collect();
                 if let Some(t) = vision::clean_reply(&vision.ask(&vision::title_prompt(&steps), None, 24)?, 80) {
                     manifest.title = Some(t.trim_end_matches('.').to_string());
                     report.titled = true;
@@ -219,8 +226,7 @@ pub fn process(
 /// - A model answer that is just the current app's own name says nothing
 ///   about what was clicked, so it is dropped.
 fn name_from_context(manifest: &mut Manifest) {
-    let mut order: Vec<usize> = (0..manifest.steps.len()).collect();
-    order.sort_by_key(|&i| manifest.steps[i].t_ms);
+    let order = live_order(manifest);
     for (n, &i) in order.iter().enumerate() {
         let next_app = order.get(n + 1).map(|&j| &manifest.steps[j]).filter(|next| {
             next.t_ms <= manifest.steps[i].t_ms + 20_000
@@ -231,7 +237,10 @@ fn name_from_context(manifest: &mut Manifest) {
         // display scale, never an ordinary Explorer or Finder window.
         let on_taskbar = openscrib_core::is_shell_bar(&win.process) && win.rect.h <= 200 && win.rect.w >= 400;
         if step.kind == StepKind::Click && on_taskbar && let Some(app) = next_app.filter(|a| !a.is_empty()) {
-            step.vision = Some(app);
+            // Stored as a known name, not a guess, so narration adds to it
+            // rather than replacing it.
+            step.ocr = Some(app);
+            step.vision = None;
             continue;
         }
         let own = app_name(win);
@@ -298,8 +307,7 @@ fn refine_narration(manifest: &mut Manifest) {
             .map(str::to_string)
             .collect()
     };
-    let mut order: Vec<usize> = (0..manifest.steps.len()).collect();
-    order.sort_by_key(|&i| manifest.steps[i].t_ms);
+    let order = live_order(manifest);
     for seg in &mut manifest.narration {
         let said = seg.text.to_lowercase();
         let Some(pos) = order.iter().position(|&i| Some(manifest.steps[i].id) == seg.step) else { continue };
@@ -316,6 +324,13 @@ fn refine_narration(manifest: &mut Manifest) {
         }
     }
     manifest.sync_transcripts();
+}
+
+/// Indices of the steps that aren't deleted, in recording order.
+fn live_order(manifest: &Manifest) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..manifest.steps.len()).filter(|&i| !manifest.steps[i].deleted).collect();
+    order.sort_by_key(|&i| manifest.steps[i].t_ms);
+    order
 }
 
 fn tempfile_path(name: &str) -> PathBuf {

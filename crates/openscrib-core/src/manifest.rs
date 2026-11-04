@@ -217,6 +217,11 @@ pub struct Step {
     /// Hide the automatic click marker.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hide_marker: bool,
+    /// Left out of the guide, video and voiceover, but kept in place: its
+    /// screen time is still in the recording, so redactions may need setting
+    /// on it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub deleted: bool,
 }
 
 impl Step {
@@ -243,12 +248,28 @@ impl Step {
             annotations: Vec::new(),
             callout: None,
             hide_marker: false,
+            deleted: false,
         }
+    }
+
+    /// Whether the step's text should come from what was said rather than a
+    /// name for the click target. The presenter knows what they clicked; the
+    /// vision model only guesses from an icon, so its guess gives way to any
+    /// narration. Names read as real text (OCR) still stand.
+    pub fn narration_leads(&self) -> bool {
+        self.kind == StepKind::Click
+            && self.vision.as_deref().is_some_and(|v| !v.trim().is_empty())
+            && self.transcript.as_deref().is_some_and(|t| !t.trim().is_empty())
     }
 
     /// Draft text without a language model: the label read under the click
     /// (OCR), then the tooltip, then the narration, then the window title.
     pub fn draft_text(&self) -> String {
+        if self.narration_leads()
+            && let Some(said) = self.transcript.as_deref().map(sentence)
+        {
+            return said;
+        }
         let label = self
             .vision
             .as_deref()
@@ -332,6 +353,10 @@ pub struct Manifest {
     pub monitors: Vec<MonitorInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video: Option<VideoTrack>,
+    /// The part of the screen exported videos show, in video pixels. `None`
+    /// shows all of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_crop: Option<Rect>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioTrack>,
     pub steps: Vec<Step>,
@@ -353,6 +378,7 @@ impl Manifest {
             duration_ms: 0,
             monitors: Vec::new(),
             video: None,
+            video_crop: None,
             audio: None,
             steps: Vec::new(),
             warnings: Vec::new(),
@@ -552,6 +578,18 @@ mod tests {
         assert_eq!(target_phrase("Local Disk (C:) drive"), "the **Local Disk (C:)** drive");
         assert_eq!(target_phrase("This PC"), "**This PC**");
         assert_eq!(target_phrase("button"), "**button**");
+    }
+
+    #[test]
+    fn narration_beats_an_icon_guess_but_not_real_text() {
+        let mut s = sample().steps.remove(0);
+        s.vision = Some("Instagram".into());
+        assert_eq!(s.draft_text(), "Click **Instagram**.");
+        s.transcript = Some("open darnellcloud connect".into());
+        assert_eq!(s.draft_text(), "Open darnellcloud connect.");
+        s.vision = None;
+        s.ocr = Some("This PC".into());
+        assert_eq!(s.draft_text(), "Click **This PC**.");
     }
 
     #[test]

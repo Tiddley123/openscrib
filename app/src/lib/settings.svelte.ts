@@ -9,6 +9,8 @@ export interface Settings {
   accent: string
   /** Video quality 1-100 for recording and export. */
   quality: number
+  /** Screenshot quality in PDFs, 1-100; 100 keeps them lossless. */
+  pdfQuality: number
   /** Exported video width cap; 0 keeps the recording's width. */
   exportWidth: number
   /** Whisper model id used by Process. */
@@ -17,7 +19,7 @@ export interface Settings {
   stopKey: string
   /** New redactions and crops also apply to later steps of the same screen. */
   carryForward: boolean
-  /** Piper voice used for video voiceovers. */
+  /** Video voiceovers: a voice name from the system, a downloaded voice's id, or empty for the system default. */
   voice: string
 }
 
@@ -25,7 +27,7 @@ export interface Settings {
 // so stop on Escape there. The Settings dialog can change it either way.
 const mac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)
 
-export const DEFAULTS: Settings = { theme: 'system', accent: '#ff5c35', quality: 75, exportWidth: 1920, whisperModel: 'small.en', stopKey: mac ? 'Ctrl+Shift+Esc' : 'Ctrl+Shift+F12', carryForward: true, voice: 'voice-en-us' }
+export const DEFAULTS: Settings = { theme: 'system', accent: '#ff5c35', quality: 75, pdfQuality: 85, exportWidth: 1920, whisperModel: 'small.en', stopKey: mac ? 'Ctrl+Shift+Esc' : 'Ctrl+Shift+F12', carryForward: true, voice: '' }
 
 export const ACCENTS = ['#ff5c35', '#e5484d', '#f5a524', '#30a46c', '#12a594', '#0a84ff', '#6e56cf', '#d6409f', '#1c1c1e']
 

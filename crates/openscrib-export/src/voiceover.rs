@@ -1,9 +1,9 @@
 //! Voiceover for exported video: each step's text read aloud, placed at that
 //! step on the output timeline and encoded as the Opus audio track. The
 //! speaking is done by a helper process: Piper, a small offline
-//! text-to-speech engine downloaded on demand, on Windows and Linux, and
-//! `say` on macOS, which drives the speech synthesiser the system already
-//! ships. Either way `speak` hands back 48 kHz mono.
+//! text-to-speech engine downloaded on demand, on Windows and Linux, or the
+//! speech synthesiser the system already ships: `say` on macOS, the WinRT
+//! synthesiser on Windows. Either way `speak` hands back 48 kHz mono.
 
 #[cfg(not(target_os = "macos"))]
 use std::io::Read;
@@ -17,7 +17,7 @@ use openscrib_core::mkv::OPUS_SAMPLE_RATE;
 use openscrib_core::{Manifest, Step, StepKind};
 use serde::Serialize;
 
-/// What reads the steps aloud. Only one of these exists per platform.
+/// What reads the steps aloud.
 #[derive(Debug, Clone)]
 pub enum Voice {
     /// Piper and one of its voices, both from the model catalogue.
@@ -27,11 +27,11 @@ pub enum Voice {
         /// Voice model (`.onnx`, with its `.onnx.json` next to it).
         model: PathBuf,
     },
-    /// The macOS speech synthesiser, through `/usr/bin/say`.
-    #[cfg(target_os = "macos")]
+    /// The system speech synthesiser.
+    #[cfg(any(windows, target_os = "macos"))]
     System {
-        /// A `say -v` voice name, or `None` for the one chosen in System
-        /// Settings.
+        /// A voice name from [`system_voices`], or `None` for the one chosen
+        /// in the system's settings.
         name: Option<String>,
     },
 }
@@ -39,9 +39,9 @@ pub enum Voice {
 /// A voice the system speech synthesiser offers, with nothing to download.
 #[derive(Debug, Clone, Serialize)]
 pub struct SystemVoice {
-    /// What `say -v` takes, and what settings store.
+    /// What the synthesiser knows it by, and what settings store.
     pub name: String,
-    /// Locale as `say` prints it, such as `en_AU`.
+    /// Such as `en_AU`.
     pub locale: String,
 }
 
@@ -81,13 +81,15 @@ impl Voice {
             Self::Piper { exe, model } => speak_piper(exe, model, &line),
             #[cfg(target_os = "macos")]
             Self::System { name } => speak_say(name.as_deref(), &line),
+            #[cfg(windows)]
+            Self::System { name } => winrt::speak(name.as_deref(), &line),
         }
     }
 
     /// The system voice called `name`, or the user's own default when that is
-    /// empty or names a voice this Mac doesn't have (settings outlive the
-    /// voices they were saved with).
-    #[cfg(target_os = "macos")]
+    /// empty or names a voice this machine doesn't have (settings outlive
+    /// the voices they were saved with).
+    #[cfg(any(windows, target_os = "macos"))]
     pub fn system(name: Option<&str>) -> Self {
         let installed = system_voices();
         let name = name
@@ -97,10 +99,12 @@ impl Voice {
     }
 }
 
-/// Voices the system speech synthesiser can read step text with. Empty off
-/// macOS, where voiceover downloads Piper and a voice instead.
+/// Voices the system speech synthesiser can read step text with. Empty
+/// where there is none, and voiceover needs Piper and a voice instead.
 pub fn system_voices() -> Vec<SystemVoice> {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    return winrt::voices().unwrap_or_default();
+    #[cfg(not(any(windows, target_os = "macos")))]
     return Vec::new();
     #[cfg(target_os = "macos")]
     {
@@ -189,7 +193,7 @@ fn speak_say(name: Option<&str>, text: &str) -> Result<Vec<f32>> {
 /// Mono samples and their rate from a 16-bit PCM WAVE file. The chunks are
 /// walked rather than assumed: `say` pads the header with a filler chunk
 /// before the samples.
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos"))]
 fn read_wav(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
     if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         bail!("the system voice wrote something that isn't a WAVE file");
@@ -230,6 +234,47 @@ fn read_wav(bytes: &[u8]) -> Result<(Vec<f32>, u32)> {
         pos = body + len + (len & 1);
     }
     bail!("the system voice wrote no audio")
+}
+
+/// The Windows speech synthesiser. This is the WinRT one rather than SAPI
+/// because it also reaches the OneCore voices, which is where the regional
+/// English voices live (Catherine and James for Australia, for a start).
+#[cfg(windows)]
+mod winrt {
+    use anyhow::{Context, Result};
+    use openscrib_core::mkv::OPUS_SAMPLE_RATE;
+    use windows::Media::SpeechSynthesis::SpeechSynthesizer;
+    use windows::Storage::Streams::DataReader;
+    use windows::core::HSTRING;
+
+    use super::{SystemVoice, read_wav, resample};
+
+    pub fn voices() -> Result<Vec<SystemVoice>> {
+        let mut out = Vec::new();
+        for v in SpeechSynthesizer::AllVoices()? {
+            out.push(SystemVoice { name: v.DisplayName()?.to_string(), locale: v.Language()?.to_string().replace('-', "_") });
+        }
+        out.sort_by(|a, b| a.locale.cmp(&b.locale).then_with(|| a.name.cmp(&b.name)));
+        Ok(out)
+    }
+
+    pub fn speak(name: Option<&str>, text: &str) -> Result<Vec<f32>> {
+        let synth = SpeechSynthesizer::new().context("starting the Windows speech synthesiser")?;
+        if let Some(name) = name {
+            let found = SpeechSynthesizer::AllVoices()?.into_iter().find(|v| v.DisplayName().is_ok_and(|n| n == name));
+            if let Some(voice) = found {
+                synth.SetVoice(&voice)?;
+            }
+        }
+        let stream = synth.SynthesizeTextToStreamAsync(&HSTRING::from(text))?.join().context("speaking with the Windows voice")?;
+        let size = stream.Size()? as u32;
+        let reader = DataReader::CreateDataReader(&stream.GetInputStreamAt(0)?)?;
+        reader.LoadAsync(size)?.join()?;
+        let mut wav = vec![0u8; size as usize];
+        reader.ReadBytes(&mut wav)?;
+        let (samples, rate) = read_wav(&wav)?;
+        Ok(resample(&samples, rate, OPUS_SAMPLE_RATE))
+    }
 }
 
 /// Speak through Piper, which writes raw PCM at its voice's own rate.
@@ -279,7 +324,7 @@ pub fn build(manifest: &Manifest, segs: &[(u64, u64)], voice: &Voice, mut progre
     let mut placed: Vec<(u64, &Step)> = Vec::new();
     let mut base = 0;
     for &(a, b) in segs {
-        for s in &manifest.steps {
+        for s in manifest.steps.iter().filter(|s| !s.deleted) {
             if s.t_ms >= a && s.t_ms < b && !placed.iter().any(|(_, p)| p.id == s.id) {
                 placed.push((base + s.t_ms.saturating_sub(LEAD_MS).max(a) - a, s));
             }
@@ -395,7 +440,21 @@ nonsense
         assert!(pcm.iter().any(|s| s.abs() > 0.01), "silence");
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(windows)]
+    #[test]
+    fn windows_voice_speaks() {
+        let voices = system_voices();
+        assert!(voices.iter().all(|v| v.locale.contains('_')), "{voices:?}");
+        assert!(voices.iter().any(|v| v.locale.starts_with("en")), "no English voice: {voices:?}");
+        for voice in [None, voices.first().map(|v| v.name.as_str())] {
+            let pcm = Voice::system(voice).speak("One. Two. Three.").expect("spoke");
+            let secs = pcm.len() as f32 / OPUS_SAMPLE_RATE as f32;
+            assert!((0.5..10.0).contains(&secs), "{secs}s of audio");
+            assert!(pcm.iter().any(|s| s.abs() > 0.01), "silence");
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn reads_wav_past_the_filler_chunk() {
         let mut wav = b"RIFF\0\0\0\0WAVE".to_vec();

@@ -4,9 +4,9 @@
   import { saveSettings, settings } from './settings.svelte'
   import { STICKERS, stickerColor } from './stickers'
 
-  type Tool = 'select' | 'marker' | 'arrow' | 'box' | 'blur' | 'sticker' | 'crop'
+  type Tool = 'select' | 'marker' | 'arrow' | 'box' | 'blur' | 'sticker' | 'crop' | 'video'
 
-  let { step = $bindable(), workDir, size, defaultCrop, highlight, snapRects = [], carry }: {
+  let { step = $bindable(), workDir, size, defaultCrop, highlight, snapRects = [], carry, videoCrop, canCropVideo, onvideocrop }: {
     step: Step
     workDir: string
     size: [number, number] | null
@@ -17,6 +17,11 @@
     snapRects?: Rect[]
     /** Redactions and crops go through these so they can carry to later steps. */
     carry: { redact: (r: Rect) => void; crop: (r: Rect) => void; clearCrop: () => void; remove: (i: number) => void }
+    /** What exported videos show, for the whole recording. */
+    videoCrop?: Rect
+    /** Whether this step's picture is of the recorded screen. */
+    canCropVideo: boolean
+    onvideocrop: (r: Rect | undefined) => void
   } = $props()
 
   const tools: { id: Tool; label: string; key: string; hint: string }[] = [
@@ -27,6 +32,7 @@
     { id: 'blur', label: 'Redact', key: 'R', hint: 'Drag over anything private; exports paint it out solid' },
     { id: 'sticker', label: 'Sticker', key: 'S', hint: 'Pick a pictograph, then click to stick it on' },
     { id: 'crop', label: 'Crop', key: 'C', hint: 'Drag the region exports should show; edges snap to the window' },
+    { id: 'video', label: 'Video crop', key: 'W', hint: 'Drag the part of the screen the exported video should show, for the whole video; edges snap to the window' },
   ]
 
   let stickerIcon = $state<StickerIcon>('warning')
@@ -128,6 +134,7 @@
       selected = null
       return
     }
+    if (tool === 'video' && !canCropVideo) return
     const p = toFrame(e)
     if (tool === 'marker') {
       step.annotations.push({ type: 'marker', at: p })
@@ -169,6 +176,7 @@
     else if (tool === 'box') step.annotations.push({ type: 'box', rect: rectOf(from, to) })
     else if (tool === 'blur') carry.redact(rectOf(from, to))
     else if (tool === 'crop') carry.crop(snapRect(rectOf(from, to)))
+    else if (tool === 'video') onvideocrop(snapRect(rectOf(from, to)))
   }
 
   function removeNote(i: number) {
@@ -226,6 +234,9 @@
     {#if step.crop}
       <button class="ghost" onclick={() => carry.clearCrop()}>Reset crop</button>
     {/if}
+    {#if videoCrop}
+      <button class="ghost" onclick={() => onvideocrop(undefined)}>Reset video crop</button>
+    {/if}
   </div>
 </div>
 {#if tool === 'blur' || tool === 'crop'}
@@ -250,7 +261,9 @@
     {/each}
   </div>
 {/if}
-<p class="hint">{tools.find((t) => t.id === tool)?.hint}</p>
+<p class="hint">
+  {tool === 'video' && !canCropVideo ? "This step isn't a picture of the recorded screen. Pick one that is to set the video crop." : tools.find((t) => t.id === tool)?.hint}
+</p>
 
 <div class="canvas" bind:this={container}>
   {#if src}
@@ -279,7 +292,17 @@
           </pattern>
         </defs>
 
-        {#if crop}
+        {#if tool === 'video'}
+          {#if videoCrop && canCropVideo}
+            <path
+              d="M0 0H{W}V{H}H0Z M{videoCrop.x} {videoCrop.y}v{videoCrop.h}h{videoCrop.w}v{-videoCrop.h}Z"
+              fill="rgba(10,10,12,0.5)"
+              fill-rule="evenodd"
+              pointer-events="none"
+            />
+            <rect x={videoCrop.x} y={videoCrop.y} width={videoCrop.w} height={videoCrop.h} fill="none" stroke={highlight} stroke-width={2 * k} pointer-events="none" />
+          {/if}
+        {:else if crop}
           <path
             d="M0 0H{W}V{H}H0Z M{crop.x} {crop.y}v{crop.h}h{crop.w}v{-crop.h}Z"
             fill="rgba(10,10,12,0.5)"
@@ -295,6 +318,20 @@
             stroke={step.crop ? '#fff' : 'rgba(255,255,255,0.7)'}
             stroke-dasharray={step.crop ? 'none' : `${8 * k} ${6 * k}`}
             stroke-width={1.5 * k}
+            pointer-events="none"
+          />
+        {/if}
+
+        {#if videoCrop && canCropVideo && tool !== 'video'}
+          <rect
+            x={videoCrop.x}
+            y={videoCrop.y}
+            width={videoCrop.w}
+            height={videoCrop.h}
+            fill="none"
+            stroke={highlight}
+            stroke-width={1.5 * k}
+            stroke-dasharray="{4 * k} {4 * k}"
             pointer-events="none"
           />
         {/if}
@@ -379,7 +416,7 @@
               width={r.w}
               height={r.h}
               fill={tool === 'blur' ? 'url(#hatch)' : 'none'}
-              stroke={tool === 'crop' ? '#fff' : highlight}
+              stroke={tool === 'crop' || tool === 'video' ? '#fff' : highlight}
               stroke-width={2 * k}
               stroke-dasharray="{6 * k} {4 * k}"
             />

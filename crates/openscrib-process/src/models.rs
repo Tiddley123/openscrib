@@ -139,7 +139,7 @@ pub const CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "voice-en-us",
         kind: ModelKind::TtsVoice,
-        label: "English (US) voice",
+        label: "English (US), female",
         note: "Lessac, clear and neutral",
         file: "en_US-lessac-medium.onnx",
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
@@ -149,10 +149,60 @@ pub const CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "voice-en-gb",
         kind: ModelKind::TtsVoice,
-        label: "English (UK) voice",
-        note: "Alba, Scottish English",
+        label: "English (Scottish), female",
+        note: "Alba",
         file: "en_GB-alba-medium.onnx",
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx",
+        size_mb: 63,
+    },
+    #[cfg(not(target_os = "macos"))]
+    ModelInfo {
+        id: "voice-en-gb-cori",
+        kind: ModelKind::TtsVoice,
+        label: "English (UK), female",
+        note: "Cori",
+        file: "en_GB-cori-medium.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/cori/medium/en_GB-cori-medium.onnx",
+        size_mb: 63,
+    },
+    #[cfg(not(target_os = "macos"))]
+    ModelInfo {
+        id: "voice-en-gb-jenny",
+        kind: ModelKind::TtsVoice,
+        label: "English (UK), female",
+        note: "Jenny",
+        file: "en_GB-jenny_dioco-medium.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium.onnx",
+        size_mb: 63,
+    },
+    #[cfg(not(target_os = "macos"))]
+    ModelInfo {
+        id: "voice-en-gb-south",
+        kind: ModelKind::TtsVoice,
+        label: "English (Southern UK), female",
+        note: "Lower quality",
+        file: "en_GB-southern_english_female-low.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/southern_english_female/low/en_GB-southern_english_female-low.onnx",
+        size_mb: 63,
+    },
+    #[cfg(not(target_os = "macos"))]
+    ModelInfo {
+        id: "voice-en-gb-alan",
+        kind: ModelKind::TtsVoice,
+        label: "English (UK), male",
+        note: "Alan",
+        file: "en_GB-alan-medium.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium/en_GB-alan-medium.onnx",
+        size_mb: 63,
+    },
+    #[cfg(not(target_os = "macos"))]
+    ModelInfo {
+        id: "voice-en-gb-north",
+        kind: ModelKind::TtsVoice,
+        label: "English (Northern UK), male",
+        note: "Northern English",
+        file: "en_GB-northern_english_male-medium.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/northern_english_male/medium/en_GB-northern_english_male-medium.onnx",
         size_mb: 63,
     },
     ModelInfo {

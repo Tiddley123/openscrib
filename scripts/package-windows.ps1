@@ -45,7 +45,9 @@ if (-not $ZipOnly) {
         Pop-Location
     }
 
-    if (Test-Path $out) { Remove-Item -Recurse -Force $out }
+    # Never clear this folder first: it may be the copy someone is testing, and
+    # portable mode keeps their recordings, models and OpenH264 in it. The
+    # copies below overwrite what we ship and leave the rest alone.
     New-Item -ItemType Directory -Force "$out\models" | Out-Null
 
     $release = Join-Path $root "target\release"
@@ -106,6 +108,13 @@ if ($unsigned) {
 
 $zip = "$out.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
-Compress-Archive -Path $out -DestinationPath $zip
+# Only what we ship goes in the zip, not anything from testing this folder.
+$stage = Join-Path $root "dist\.zip-stage"
+if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+$top = New-Item -ItemType Directory -Force "$stage\$name\models"
+Get-ChildItem $out -File | Where-Object { $_.Name -notlike "openh264*" } | Copy-Item -Destination "$stage\$name"
+Copy-Item "$out\models\README.txt" $top.FullName
+Compress-Archive -Path "$stage\$name" -DestinationPath $zip
+Remove-Item -Recurse -Force $stage
 $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 Write-Host "Zipped $zip ($size MB)"

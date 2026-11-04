@@ -15,12 +15,13 @@ cd app && npm install && npx tauri build --no-bundle
 
 This builds `target/release/openscrib-app.exe`. From the editor you can record, open and save projects, and:
 
-- **Steps:** drag to reorder, delete, edit the text (with `**bold**` and `` `code` ``).
+- **Steps:** drag to reorder, edit the text (with `**bold**` and `` `code` ``), or delete. A deleted step stays in the list, greyed out, so you can still set redactions on that moment of the video; restore it, or remove it for good, from the inspector.
 - **Annotations:** draw arrows, boxes and markers, redact private areas (painted solid on export), or set a custom crop. To delete one, use the ✕ in the Notes list, right-click it, or select it and press Delete.
 - **Clips:** trim each step's video against a preview, or click **Auto**.
-- **✦ Process:** transcribe your narration and read the label under each click, then redraft any step text you haven't edited.
-- **Export:** PDF, HTML, Markdown, MP4 and MKV.
-- **Settings:** theme (system, light or dark), accent colour, video quality, exported video size, and models to download. Each guide also has its own highlight colour.
+- **Video crop:** drag the part of the screen the exported video should show. It applies to the whole video and leaves the guide's screenshots alone.
+- **✦ Process:** transcribe your narration and read the label under each click, then redraft any step text you haven't edited. What you said takes priority over an icon guessed by the vision model.
+- **Export:** PDF, HTML, Markdown, MP4 and MKV, with the size of each shown before you start.
+- **Settings:** theme (system, light or dark), accent colour, video quality, PDF image quality, exported video size, and models to download. Each guide also has its own highlight colour.
 
 For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on its own works in a plain browser too, against a mock backend fed from `app/dev-mock/`.
 
@@ -35,9 +36,9 @@ For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on it
 
 ## Status: M6 (polish and release)
 
-- [x] Portable Windows release: `scriptspackage-windows.ps1` builds `distOpenSCRIB-<version>-windows-x64` (and a zip) with the app, CLI (`openscrib-cli.exe`), vision helper and app-local Visual C++ runtime
+- [x] Portable Windows release: `scripts\package-windows.ps1` builds `dist\OpenSCRIB-<version>-windows-x64` (and a zip) with the app, CLI (`openscrib-cli.exe`), vision helper and app-local Visual C++ runtime
 - [x] First-run OpenH264: **Get OpenH264** on the home screen (or `openscrib setup`) downloads Cisco's build and checks its SHA-256
-- [x] Voiceover: the step text is read aloud in video exports and the captions follow the spoken text (`--voiceover` in the CLI, Settings -> Models in the editor). Windows and Linux download Piper and a voice; macOS speaks through the voices it already ships, so there is nothing to download there
+- [x] Voiceover: the step text is read aloud in video exports and the captions follow the spoken text (`--voiceover` in the CLI, Settings -> Models in the editor). Windows and macOS speak through the voices they already ship, Australian ones included, with nothing to download (`--voiceover "Microsoft Catherine"`). Windows and Linux can also download Piper and US, UK or Scottish voices; Piper has no Australian voice
 - [x] Redactions and crops carry forward to later steps of the same screen; redactions are also painted into the exported video while their step is active
 - [x] macOS release: `scripts/package-macos.sh` builds, Developer ID signs and packages `OpenSCRIB.app` (with the CLI and vision helper inside it) as a .dmg and a .zip; `--notarize <profile>` submits it to Apple and staples the ticket
 - [x] macOS capture: window and Dock lookups through CoreGraphics, points converted to pixels at the boundary, Metal for Whisper and the vision model, Screen Recording and Accessibility onboarding on the home screen, and capture checks in `openscrib devices`

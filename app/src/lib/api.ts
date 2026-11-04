@@ -67,6 +67,8 @@ export interface Step {
   annotations: Annotation[]
   callout?: Callout
   hide_marker?: boolean
+  /** Left out of guides and videos, kept so redactions can still be set on it. */
+  deleted?: boolean
 }
 
 export interface MonitorInfo {
@@ -86,6 +88,8 @@ export interface Manifest {
   duration_ms: number
   monitors: MonitorInfo[]
   video?: { file: string; monitor: number; width: number; height: number; max_fps: number; frames: number; first_ms: number }
+  /** The part of the screen exported videos show. */
+  video_crop?: Rect
   audio?: { file: string; device: string; device_rate: number; channels: number; first_ms: number }
   steps: Step[]
   warnings?: string[]
@@ -180,9 +184,12 @@ export const api = {
     full_frame: boolean
     quality: number
     max_width: number
+    pdf_quality: number
     voiceover: string | null
   }) =>
     invoke<void>('export_project', { req }),
+  estimateExport: (req: { manifest: Manifest; full_frame: boolean; quality: number; max_width: number; pdf_quality: number }) =>
+    dev ? Promise.resolve<Record<string, number>>({}) : invoke<Record<string, number>>('estimate_export', { req }),
   startRecording: (req: RecordRequest) =>
     invoke<string>('start_recording', { req }),
   stopRecording: () => invoke<void>('stop_recording'),
@@ -214,6 +221,20 @@ export function fileUrl(workDir: string, rel: string): string {
 /** URL the WebView can load for an absolute local path. */
 export function localUrl(path: string): string {
   return inTauri ? convertFileSrc(path) : path
+}
+
+/** Step numbers as exported: deleted steps don't count. */
+export function stepNumbers(steps: Step[]): Map<number, number> {
+  const numbers = new Map<number, number>()
+  for (const s of steps) {
+    if (!s.deleted) numbers.set(s.id, numbers.size + 1)
+  }
+  return numbers
+}
+
+export function formatBytes(n: number): string {
+  if (n < 1e6) return `${Math.max(1, Math.round(n / 1e3))} KB`
+  return n < 1e9 ? `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)} MB` : `${(n / 1e9).toFixed(1)} GB`
 }
 
 export function formatTime(ms: number): string {

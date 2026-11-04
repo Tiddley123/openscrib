@@ -138,6 +138,16 @@
     </section>
 
     <section>
+      <div class="row">
+        <div class="label">PDF image quality</div>
+        <span class="value">{settings.pdfQuality === 100 ? 'Lossless' : settings.pdfQuality}</span>
+      </div>
+      <input class="slider" type="range" min="1" max="100" step="1" bind:value={settings.pdfQuality} />
+      <div class="scale"><span>Smaller files</span><span>Sharper screenshots</span></div>
+      <p class="hint">Applies to screenshots in exported PDFs. The Export window shows what the size comes to.</p>
+    </section>
+
+    <section>
       <div class="label">Stop recording shortcut</div>
       <div class="hotkey">
         <button class="keys" class:listening onclick={() => (listening = !listening)}>

@@ -49,6 +49,9 @@ enum Cmd {
         /// Also render each PDF page to page-NN.png (for previews).
         #[arg(long)]
         pdf_pages: bool,
+        /// Screenshot quality in the PDF, 1-100 (100 keeps them lossless).
+        #[arg(long, default_value_t = openscrib_export::pdf::DEFAULT_QUALITY, value_parser = clap::value_parser!(u8).range(1..=100))]
+        pdf_quality: u8,
         /// Video quality, 1-100.
         #[arg(long, default_value_t = openscrib_core::quality::DEFAULT_QUALITY, value_parser = clap::value_parser!(u8).range(1..=100))]
         quality: u8,
@@ -56,8 +59,8 @@ enum Cmd {
         #[arg(long, default_value_t = 1920)]
         max_width: u32,
         /// Read the step text aloud instead of using the recorded narration
-        /// (Piper voice id such as voice-en-us on Windows and Linux, or a
-        /// macOS voice name such as Samantha; both are listed by `models`.)
+        /// (a Piper voice id such as voice-en-gb-cori, or a system voice name
+        /// such as "Microsoft Catherine" or Samantha; `models` lists both.)
         #[arg(long)]
         voiceover: Option<String>,
     },
@@ -152,8 +155,8 @@ fn main() -> Result<()> {
 
     match Cli::parse().cmd {
         Cmd::Record(args) => record(args),
-        Cmd::Export { project, format, out, full_frame, pdf_pages, quality, max_width, voiceover } => {
-            export(&project, &format, out, full_frame, pdf_pages, quality, max_width, voiceover.as_deref())
+        Cmd::Export { project, format, out, full_frame, pdf_pages, pdf_quality, quality, max_width, voiceover } => {
+            export(&project, &format, out, full_frame, pdf_pages, pdf_quality, quality, max_width, voiceover.as_deref())
         }
         Cmd::Models { action } => models(action),
         Cmd::Process { project, whisper } => process(&project, whisper.as_deref()),
@@ -399,6 +402,7 @@ fn export(
     out: Option<PathBuf>,
     full_frame: bool,
     pdf_pages: bool,
+    pdf_quality: u8,
     quality: u8,
     max_width: u32,
     voiceover: Option<&str>,
@@ -470,9 +474,9 @@ fn export(
             GuideFormat::Pdf => {
                 let p = out.join(format!("{stem}.pdf"));
                 let g = ensure_guide(&mut guide_cache, &dir, &manifest, &opts)?;
-                g.write_pdf(&p)?;
+                g.write_pdf(&p, pdf_quality)?;
                 if pdf_pages {
-                    for (i, png) in g.pdf_page_pngs(1.5)?.iter().enumerate() {
+                    for (i, png) in g.pdf_page_pngs(1.5, pdf_quality)?.iter().enumerate() {
                         fs::write(out.join(format!("page-{:02}.png", i + 1)), png)?;
                     }
                 }
@@ -496,11 +500,15 @@ fn ensure_guide<'a>(
     Ok(cache.as_ref().expect("just built"))
 }
 
-/// The voice `--voiceover` asked for. Windows and Linux need Piper and a
-/// voice downloaded; macOS speaks through the synthesiser it already ships,
-/// so a name it doesn't know just means the user's own default voice.
+/// The voice `--voiceover` asked for: a downloaded Piper voice by id, or on
+/// Windows and macOS a voice the system ships by name, where one it doesn't
+/// know just means the user's own default voice.
 #[cfg(not(target_os = "macos"))]
 fn voice(id: &str) -> Result<openscrib_export::voiceover::Voice> {
+    #[cfg(windows)]
+    if openscrib_process::models::find(id).is_none() {
+        return Ok(openscrib_export::voiceover::Voice::system(Some(id)));
+    }
     let (exe, model) = openscrib_process::models::tts_paths(Some(id))
         .context("voiceover needs Piper and a voice: openscrib models download piper && openscrib models download voice-en-us")?;
     Ok(openscrib_export::voiceover::Voice::Piper { exe, model })
@@ -665,7 +673,7 @@ fn markers(project: &Path, out: &Path) -> Result<()> {
     fs::create_dir_all(out)?;
 
     let mut md = String::from("# Recorded guide\n\n");
-    for (n, s) in m.steps.iter().enumerate() {
+    for (n, s) in m.steps.iter().filter(|s| !s.deleted).enumerate() {
         md.push_str(&format!("{}. {}\n", n + 1, s.text));
         for (rel, suffix) in [(&s.frame, ""), (&s.pre_frame, "_pre")] {
             let Some(rel) = rel else { continue };

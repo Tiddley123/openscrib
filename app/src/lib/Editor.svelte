@@ -2,7 +2,7 @@
   import { listen } from '@tauri-apps/api/event'
   import { onMount } from 'svelte'
   import { open as openDialog } from '@tauri-apps/plugin-dialog'
-  import { api, type Manifest, type ProcessProgress, type ProcessReport, type ProjectView, type Rect, type Step } from './api'
+  import { api, stepNumbers, type Manifest, type ProcessProgress, type ProcessReport, type ProjectView, type Rect, type Step } from './api'
   import { addRedaction, clearCrop, removeNote, setCrop } from './carry'
   import { settings } from './settings.svelte'
   import ExportDialog from './ExportDialog.svelte'
@@ -37,6 +37,7 @@
 
   let index = $derived(project.manifest.steps.findIndex((s) => s.id === selectedId))
   let step = $derived(index >= 0 ? project.manifest.steps[index] : null)
+  let numbers = $derived(stepNumbers(project.manifest.steps))
 
   async function save() {
     saving = true
@@ -89,7 +90,22 @@
     selectedId = id
   }
 
+  // A recorded step stays in the list, greyed out: the moment it covers is
+  // still in the recording and may need redacting. An added step has no such
+  // moment, so it can simply go.
   function remove(id: number) {
+    const s = project.manifest.steps.find((s) => s.id === id)
+    if (!s) return
+    if (s.kind === 'note') removeForGood(id)
+    else s.deleted = true
+  }
+
+  function restore(id: number) {
+    const s = project.manifest.steps.find((s) => s.id === id)
+    if (s) s.deleted = undefined
+  }
+
+  function removeForGood(id: number) {
     const steps = project.manifest.steps
     const i = steps.findIndex((s) => s.id === id)
     if (i < 0) return
@@ -188,13 +204,13 @@
     <button class="ghost" onclick={onsettings}>Settings</button>
     <button
       onclick={runProcess}
-      disabled={processing !== null || project.manifest.steps.length === 0}
+      disabled={processing !== null || numbers.size === 0}
       title="Transcribe narration and read on-screen labels, then redraft step text you haven't edited"
     >
       ✦ Process
     </button>
     <button onclick={save} disabled={!dirty || saving} title="Save (Ctrl+S)">Save</button>
-    <button class="primary" onclick={() => (exporting = true)} disabled={project.manifest.steps.length === 0}>Export</button>
+    <button class="primary" onclick={() => (exporting = true)} disabled={numbers.size === 0}>Export</button>
   </header>
 
   {#if processing}
@@ -231,11 +247,18 @@
       onselect={(id) => (selectedId = id)}
       onreorder={reorder}
       ondelete={remove}
+      onrestore={restore}
       onadd={addStep}
     />
 
     <section class="stage">
       {#if step}
+        {#if step.deleted}
+          <div class="deleted-note">
+            <span>Deleted step: not in the guide or voiceover. Redactions set here still cover this moment in the video.</span>
+            <button class="ghost" onclick={() => restore(step.id)}>Restore</button>
+          </div>
+        {/if}
         {#key step.id}
           <StepCanvas
             bind:step={project.manifest.steps[index]}
@@ -250,6 +273,9 @@
               clearCrop: () => clearCrop(project.manifest, index),
               remove: (i) => removeNote(project.manifest, index, i),
             }}
+            videoCrop={project.manifest.video_crop}
+            canCropVideo={!!step.frame && step.monitor === project.manifest.video?.monitor}
+            onvideocrop={(r) => (project.manifest.video_crop = r)}
           />
         {/key}
       {:else}
@@ -261,11 +287,13 @@
       <Inspector
         bind:step={project.manifest.steps[index]}
         bind:manifest={project.manifest}
-        number={index + 1}
+        number={numbers.get(step.id) ?? null}
         previewVideo={project.preview_video}
         duration={project.manifest.duration_ms}
         nextT={project.manifest.steps[index + 1]?.t_ms ?? null}
         ondelete={() => remove(step.id)}
+        onrestore={() => restore(step.id)}
+        onremove={() => removeForGood(step.id)}
       />
     {/if}
   </div>
@@ -422,6 +450,17 @@
     display: flex;
     flex-direction: column;
     background: var(--bg);
+  }
+  .deleted-note {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--ink-2);
+    font-size: 13px;
   }
   .empty {
     margin: auto;

@@ -118,6 +118,7 @@ pub fn segments(manifest: &Manifest) -> Vec<(u64, u64)> {
     let clips: Vec<_> = manifest
         .steps
         .iter()
+        .filter(|s| !s.deleted)
         .filter_map(|s| s.clip)
         .filter(|c| c.end_ms > c.start_ms)
         .map(|c| (c.start_ms, c.end_ms.min(manifest.duration_ms)))
@@ -129,6 +130,52 @@ pub fn segments(manifest: &Manifest) -> Vec<(u64, u64)> {
     let start = manifest.video.as_ref().map_or(0, |v| v.first_ms);
     vec![(start, manifest.duration_ms)]
 }
+
+/// Smallest video crop honoured, in pixels. Anything tinier is a slip of the
+/// mouse rather than a video anyone wants.
+const MIN_VIEWPORT: u32 = 16;
+
+/// The part of a `w`x`h` recording the export shows: `video_crop` kept inside
+/// the frame, or the whole frame without a usable one.
+fn viewport(manifest: &Manifest, w: u32, h: u32) -> Rect {
+    let full = Rect { x: 0, y: 0, w, h };
+    let Some(crop) = manifest.video_crop else { return full };
+    let x = crop.x.clamp(0, w as i32 - 1);
+    let y = crop.y.clamp(0, h as i32 - 1);
+    let view = Rect { x, y, w: crop.w.min(w - x as u32), h: crop.h.min(h - y as u32) };
+    if view.w < MIN_VIEWPORT || view.h < MIN_VIEWPORT { full } else { view }
+}
+
+/// Output size and scale for a viewport: never upscaled, even-sized for H.264.
+fn output_size(view: Rect, max_width: u32) -> (u32, u32, f32) {
+    let scale = (max_width as f32 / view.w as f32).min(1.0);
+    (((view.w as f32 * scale) as u32) & !1, ((view.h as f32 * scale) as u32) & !1, scale)
+}
+
+/// Rough size of an export in bytes, or `None` without a screen video. Screen
+/// recordings compress by how much changes rather than by length, so this
+/// scales the recording's own size: by the share of it kept, by pixels
+/// (sub-linearly, since scaled text compresses worse) and by quantiser, every
+/// six steps of which halve the bits.
+pub fn estimate_size(dir: &ProjectDir, manifest: &Manifest, quality: u8, max_width: u32) -> Option<u64> {
+    let video = manifest.video.as_ref()?;
+    let source = fs::metadata(dir.path(SCREEN_FILE)).ok()?.len() as f64;
+    let total = manifest.duration_ms.max(1) as f64;
+    let kept: u64 = segments(manifest).iter().map(|(a, b)| b - a).sum();
+    let kept_share = (kept as f64 / total).min(1.0);
+    let audio = if manifest.audio.is_some() { AUDIO_BYTES_PER_MS * total } else { 0.0 };
+
+    let (out_w, out_h, _) = output_size(viewport(manifest, video.width, video.height), max_width);
+    let pixels = (out_w as f64 * out_h as f64) / (video.width as f64 * video.height as f64).max(1.0);
+    let qp = |q: u8| quality::qp_range(q).1 as f64;
+    let sharpness = 2f64.powf((qp(quality::DEFAULT_QUALITY) - qp(quality)) / 6.0);
+
+    let frames = (source - audio).max(0.0) * kept_share * pixels.powf(0.75) * sharpness;
+    Some((frames + audio * kept_share) as u64)
+}
+
+/// Opus narration at the bitrate recordings use.
+const AUDIO_BYTES_PER_MS: f64 = 4.0;
 
 /// What an output frame shows: source frame, rounded cursor position, and
 /// whether a click ripple is animating. Unchanged keys are not re-encoded.
@@ -166,6 +213,24 @@ impl Redactions {
         let i = self.0.partition_point(|(st, _)| *st <= t).saturating_sub(1);
         (i, self.0.get(i).map_or(&[][..], |(_, r)| r.as_slice()))
     }
+}
+
+/// A redaction in output pixels, cut to the viewport, or `None` when it falls
+/// outside it. Rounded outward, so scaling can't leave an edge showing.
+fn redaction_in_view(r: Rect, view: Rect, scale: f32) -> Option<Rect> {
+    let x0 = r.x.max(view.x);
+    let y0 = r.y.max(view.y);
+    let x1 = (r.x + r.w as i32).min(view.x + view.w as i32);
+    let y1 = (r.y + r.h as i32).min(view.y + view.h as i32);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some(Rect {
+        x: ((x0 - view.x) as f32 * scale).floor() as i32,
+        y: ((y0 - view.y) as f32 * scale).floor() as i32,
+        w: ((x1 - x0) as f32 * scale).ceil() as u32 + 1,
+        h: ((y1 - y0) as f32 * scale).ceil() as u32 + 1,
+    })
 }
 
 struct Packet {
@@ -269,9 +334,11 @@ pub fn export_video(
     let redactions = Redactions::new(manifest, video_info.monitor);
 
     let (src_w, src_h) = (video_info.width, video_info.height);
-    let scale = (opts.max_width as f32 / src_w as f32).min(1.0);
-    let out_w = ((src_w as f32 * scale) as u32) & !1;
-    let out_h = ((src_h as f32 * scale) as u32) & !1;
+    let view = viewport(manifest, src_w, src_h);
+    let cropped = view.w != src_w || view.h != src_h;
+    let (out_w, out_h, scale) = output_size(view, opts.max_width);
+    // Screen position to output pixels.
+    let to_out = move |x: f32, y: f32| ((x - view.x as f32) * scale, (y - view.y as f32) * scale);
 
     let api = || OpenH264API::from_blob_path(&opts.openh264).with_context(|| format!("loading {}", opts.openh264.display()));
     let mut decoder = Decoder::with_api_config(api()?, DecoderConfig::new()).context("creating decoder")?;
@@ -351,7 +418,7 @@ pub fn export_video(
             }
 
             let cursor = if opts.cursor {
-                pointer.at(t).map(|(x, y)| ((x - origin.x as f32) * scale, (y - origin.y as f32) * scale))
+                pointer.at(t).map(|(x, y)| to_out(x - origin.x as f32, y - origin.y as f32))
             } else {
                 None
             };
@@ -363,25 +430,23 @@ pub fn export_video(
             if (changed || first_in_seg)
                 && let Some(src) = &src_rgba
             {
+                let visible = cropped.then(|| imageops::crop_imm(src, view.x as u32, view.y as u32, view.w, view.h).to_image());
+                let visible = visible.as_ref().unwrap_or(src);
                 let mut frame = if scale < 1.0 {
                     let mut dst = RgbaImage::new(out_w, out_h);
-                    resizer.resize(src, &mut dst, &resize_opts).context("scaling frame")?;
+                    resizer.resize(visible, &mut dst, &resize_opts).context("scaling frame")?;
                     dst
                 } else {
-                    imageops::crop_imm(src, 0, 0, out_w, out_h).to_image()
+                    imageops::crop_imm(visible, 0, 0, out_w, out_h).to_image()
                 };
                 for r in hidden {
-                    let scaled = Rect {
-                        x: (r.x as f32 * scale).floor() as i32,
-                        y: (r.y as f32 * scale).floor() as i32,
-                        w: (r.w as f32 * scale).ceil() as u32 + 1,
-                        h: (r.h as f32 * scale).ceil() as u32 + 1,
-                    };
-                    crate::render::redact(&mut frame, scaled);
+                    if let Some(r) = redaction_in_view(*r, view, scale) {
+                        crate::render::redact(&mut frame, r);
+                    }
                 }
                 if opts.clicks {
                     for (p, k) in pointer.ripples(t) {
-                        let at = ((p.x - origin.x) as f32 * scale, (p.y - origin.y) as f32 * scale);
+                        let at = to_out((p.x - origin.x) as f32, (p.y - origin.y) as f32);
                         draw_ripple(&mut frame, at, k, ui_scale, accent);
                     }
                 }
@@ -621,6 +686,56 @@ mod tests {
         // Reordered in the editor: b before a.
         m.steps = vec![b, c, a];
         assert_eq!(segments(&m), [(29_000, 60_000), (9_000, 12_000)]);
+    }
+
+    #[test]
+    fn deleted_steps_lose_their_clip_but_keep_their_redactions() {
+        let mut m = Manifest::new("t");
+        m.duration_ms = 60_000;
+        let r = Rect { x: 10, y: 10, w: 50, h: 20 };
+        let mut a = Step::new(1, 5_000, StepKind::Click);
+        a.clip = Some(Clip { start_ms: 4_000, end_ms: 8_000 });
+        let mut b = Step::new(2, 9_000, StepKind::Click);
+        b.clip = Some(Clip { start_ms: 8_000, end_ms: 12_000 });
+        b.monitor = Some(7);
+        b.annotations.push(Annotation::Blur { rect: r, group: None });
+        b.deleted = true;
+        m.steps = vec![a, b];
+        assert_eq!(segments(&m), [(4_000, 8_000)]);
+        assert_eq!(Redactions::new(&m, 7).at(10_000).1, [r]);
+    }
+
+    #[test]
+    fn viewport_stays_inside_the_frame() {
+        let mut m = Manifest::new("t");
+        let full = Rect { x: 0, y: 0, w: 1920, h: 1080 };
+        assert_eq!(viewport(&m, 1920, 1080), full);
+        m.video_crop = Some(Rect { x: 100, y: 200, w: 800, h: 600 });
+        assert_eq!(viewport(&m, 1920, 1080), Rect { x: 100, y: 200, w: 800, h: 600 });
+        m.video_crop = Some(Rect { x: 1800, y: 1000, w: 800, h: 600 });
+        assert_eq!(viewport(&m, 1920, 1080), Rect { x: 1800, y: 1000, w: 120, h: 80 });
+        m.video_crop = Some(Rect { x: 5000, y: 0, w: 800, h: 600 });
+        assert_eq!(viewport(&m, 1920, 1080), full);
+        m.video_crop = Some(Rect { x: 10, y: 10, w: 3, h: 3 });
+        assert_eq!(viewport(&m, 1920, 1080), full);
+    }
+
+    #[test]
+    fn output_is_even_and_never_upscaled() {
+        assert_eq!(output_size(Rect { x: 0, y: 0, w: 801, h: 601 }, 1920), (800, 600, 1.0));
+        let (w, h, scale) = output_size(Rect { x: 0, y: 0, w: 3440, h: 1440 }, 1720);
+        assert_eq!((w, h, scale), (1720, 720, 0.5));
+    }
+
+    #[test]
+    fn redactions_are_cut_to_the_viewport() {
+        let view = Rect { x: 100, y: 100, w: 400, h: 300 };
+        // Hangs over the left edge: only the part inside is painted.
+        assert_eq!(
+            redaction_in_view(Rect { x: 50, y: 150, w: 100, h: 20 }, view, 1.0),
+            Some(Rect { x: 0, y: 50, w: 51, h: 21 })
+        );
+        assert_eq!(redaction_in_view(Rect { x: 0, y: 0, w: 50, h: 50 }, view, 1.0), None);
     }
 
     #[test]

@@ -22,15 +22,15 @@
   // System voices come from the OS, so they group by language rather than by
   // download size. The user's own language leads the list.
   let voiceGroups = $derived(groupByLanguage(systemVoices))
+  let onMac = /Mac/i.test(navigator.userAgent)
 
   async function refresh() {
     models = await api.listModels().catch(() => [])
     systemVoices = await api.listVoices().catch(() => [])
-    // A voice saved on another machine, or the Piper default, isn't one of
-    // these; show the system's own voice as the choice instead.
-    if (systemVoices.length && !systemVoices.some((v) => v.name === settings.voice)) {
-      settings.voice = ''
-    }
+    // A voice saved on another machine may not be here; show the system's own
+    // voice as the choice instead.
+    const known = systemVoices.some((v) => v.name === settings.voice) || voices.some((m) => m.id === settings.voice && m.installed)
+    if (systemVoices.length && !known) settings.voice = ''
   }
 
   function languageName(locale: string): string {
@@ -185,7 +185,7 @@
   <p class="hint">
     Reads each step's text aloud in exported videos, instead of your recorded narration.
     {#if systemVoices.length}
-      Uses the speech built into macOS, so there is nothing to download.
+      The voices built into {onMac ? 'macOS' : 'Windows'} need no download{engine ? '; the downloadable ones below need the engine and a voice' : ''}.
     {:else}
       Needs the engine and one voice.
     {/if}
@@ -204,9 +204,20 @@
                 {/each}
               </optgroup>
             {/each}
+            {#if voices.some((m) => m.installed)}
+              <optgroup label="Downloaded">
+                {#each voices.filter((m) => m.installed) as m (m.id)}
+                  <option value={m.id}>{m.label}: {m.note}</option>
+                {/each}
+              </optgroup>
+            {/if}
           </select>
         </label>
-        <span class="note">Add more in System Settings → Accessibility → Spoken Content → System Voice.</span>
+        <span class="note">
+          {onMac
+            ? 'Add more in System Settings → Accessibility → Spoken Content → System Voice.'
+            : 'Add more in Windows Settings → Time & language → Speech → Manage voices.'}
+        </span>
       </li>
     {/if}
     {#if engine}

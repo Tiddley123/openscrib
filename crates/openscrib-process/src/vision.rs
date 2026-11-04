@@ -150,7 +150,7 @@ pub fn identify_prompt(step: &Step) -> String {
 /// the model copies them. Its answer is checked by [`accept_polish`].
 pub fn polish_prompt(step: &Step, draft: &str) -> String {
     let said = step.transcript.as_deref().unwrap_or_default().trim();
-    if step.kind == StepKind::Note {
+    if step.kind == StepKind::Note || step.narration_leads() {
         return format!(
             "Turn what a presenter said into one or two clear sentences for a how-to guide. Use only their words \
              and meaning; drop filler like \"okay\" or \"so now\".\nThe presenter said: \"{said}\"\nSentences:"
