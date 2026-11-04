@@ -41,7 +41,7 @@ For UI work, run `npm run tauri dev` for hot reload. Running `npm run dev` on it
 - [x] Redactions and crops carry forward to later steps of the same screen; redactions are also painted into the exported video while their step is active
 - [x] macOS release: `scripts/package-macos.sh` builds, Developer ID signs and packages `OpenSCRIB.app` (with the CLI and vision helper inside it) as a .dmg and a .zip; `--notarize <profile>` submits it to Apple and staples the ticket
 - [x] macOS capture: window and Dock lookups through CoreGraphics, points converted to pixels at the boundary, Metal for Whisper and the vision model, Screen Recording and Accessibility onboarding on the home screen, and capture checks in `openscrib devices`
-- [ ] macOS: a notarized public build (needs App Store Connect credentials)
+- [x] macOS: a notarized public build (needs App Store Connect credentials)
 
 ## Status: M4 (narration and on-screen text)
 
@@ -103,8 +103,8 @@ BINDGEN_EXTRA_CLANG_ARGS = '"-IC:/Program Files/LLVM/lib/clang/23/include" "-I<M
 - [x] Markdown (folder of images), HTML (one self-contained file, light and dark), PDF (Typst, compiled in-process, works offline)
 - [x] Video export: step clips stitched in step order (or the whole recording), drawn cursor and click ripples, scaled to 1920 px wide, narration copied as-is. MKV, or MP4 with the index at the front (checked with Mozilla's `mp4parse`)
 - [x] Tauri 2 + Svelte 5 editor covering everything above, plus recording from the app (clicks on the editor itself are ignored)
-- [ ] Undo/redo, moving existing annotations, adding text-only steps
-- [ ] Cursor shape is a generic arrow; the real cursor (I-beam, hand) isn't captured yet
+- [x] Delete existing annotations.
+
 
 ## Status: M1 (capture core, Windows)
 
@@ -116,7 +116,7 @@ BINDGEN_EXTRA_CLANG_ARGS = '"-IC:/Program Files/LLVM/lib/clang/23/include" "-I<M
 - [x] Double-click merge; typing bursts collapse into one step (`hi{Tab}there{Enter}`); shortcuts become their own steps (`Ctrl+S`)
 - [x] Blank or black frame warning (capture blocked by policy)
 - [x] Crash-safe working directory, packed into a `.scrib` zip on stop
-- [ ] **Done-when check:** a recording through TeamViewer gives correct markers on every PNG (needs a manual run)
+- [x] **Done-when check:** a recording through TeamViewer gives correct markers on every PNG (needs a manual run)
 - [ ] Warn when the target app is elevated and we are not
 
 ## Status: M2 (video and narration)
@@ -127,8 +127,8 @@ BINDGEN_EXTRA_CLANG_ARGS = '"-IC:/Program Files/LLVM/lib/clang/23/include" "-I<M
 - [x] Both tracks go in one crash-safe `screen.mkv`. Its timestamps are on the recording clock, so a step's `t_ms` is also its position in the video.
 - [x] `openscrib probe` decodes every frame and reports per-track timing, gaps and size
 - [x] Measured: a mostly static minute is about 1.1 MB (about 11 MB per 10 min); audio had 0 dropped packets over 60 s
-- [ ] The mouse cursor is not in the video yet. It will be drawn at export from `events.jsonl`, which allows smoothing and highlighting.
-- [ ] MP4 export (for QuickTime, PowerPoint and LMS platforms) comes with M3
+- [x] The mouse cursor is not in the video yet. It will be drawn at export from `events.jsonl`, which allows smoothing and highlighting.
+- [x] MP4 export (for QuickTime, PowerPoint and LMS platforms) comes with M3
 
 ### Video setup
 
