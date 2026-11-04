@@ -39,6 +39,9 @@
   }
 
   onMount(() => {
+    api.startupProject().then((path) => {
+      if (path) open(path)
+    })
     const un = [
       listen<string>('recording-finished', async (e) => {
         recording = false

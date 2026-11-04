@@ -2,6 +2,7 @@
 //! the `project.json` manifest, the `.scrib` container and click markers.
 
 pub mod clock;
+pub mod legacy;
 pub mod manifest;
 pub mod markers;
 pub mod mkv;

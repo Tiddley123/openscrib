@@ -80,6 +80,10 @@ enum Cmd {
     Setup,
     /// List monitors and microphones.
     Devices,
+    /// Find portable copies of OpenSCRIB and replace them with this install.
+    /// The installer runs these. Recordings are copied and never deleted.
+    #[command(subcommand)]
+    OldCopies(OldCopiesCmd),
     /// Read a project's screen.mkv back, decode every video frame, and
     /// report per-track timing and size.
     Probe {
@@ -87,6 +91,19 @@ enum Cmd {
         /// Save the last decoded video frame here as a PNG.
         #[arg(long)]
         frame: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum OldCopiesCmd {
+    /// Print what replacing a copy would do. Exits with 2 past the last copy.
+    Describe { index: usize },
+    /// Replace a copy, given its index or its folder.
+    Replace {
+        #[arg(required_unless_present = "dir")]
+        index: Option<usize>,
+        #[arg(long, conflicts_with = "index")]
+        dir: Option<PathBuf>,
     },
 }
 
@@ -168,6 +185,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Devices => devices(),
+        Cmd::OldCopies(cmd) => old_copies(cmd),
         Cmd::Probe { project, frame } => probe(&*load(&project)?, frame.as_deref()),
         Cmd::Info { project } => print_info(&load(&project)?.read_manifest()?),
         Cmd::Markers { project, out } => markers(&project, &out),
@@ -590,6 +608,45 @@ fn process(project: &Path, whisper: Option<&str>) -> Result<()> {
         tracing::warn!("skipped: {s}");
     }
     print_info(&manifest)
+}
+
+fn old_copies(cmd: OldCopiesCmd) -> Result<()> {
+    use openscrib_core::legacy;
+
+    let to = legacy::Destinations::installed();
+    match cmd {
+        OldCopiesCmd::Describe { index } => {
+            let Some(dir) = legacy::find().into_iter().nth(index) else { std::process::exit(2) };
+            let recordings = match legacy::count_recordings(&dir) {
+                0 => "It has no recordings.".to_string(),
+                1 => format!("Its recording will be copied to {}, and the original stays where it is.", to.projects.display()),
+                n => format!("Its {n} recordings will be copied to {}, and the originals stay where they are.", to.projects.display()),
+            };
+            println!(
+                "Found an older copy of OpenSCRIB in:\r\n{}\r\n\r\n{recordings}\r\n\r\nReplace it? Its program files are removed, and any downloaded models move to this version.",
+                dir.display()
+            );
+        }
+        OldCopiesCmd::Replace { index, dir } => {
+            anyhow::ensure!(openscrib_core::paths::is_installed(), "this is a portable copy, so there's nothing to replace it with");
+            let dir = match (dir, index) {
+                (Some(dir), _) => dir,
+                (None, Some(index)) => legacy::find().into_iter().nth(index).context("no older copy at that index")?,
+                (None, None) => unreachable!("clap requires one of them"),
+            };
+            let done = legacy::replace(&dir, &to)?;
+            let mut said = match done.recordings {
+                0 => "The older copy has been replaced.".to_string(),
+                1 => format!("The older copy has been replaced. Your recording is in {}.", to.projects.display()),
+                n => format!("The older copy has been replaced. Your {n} recordings are in {}.", to.projects.display()),
+            };
+            if done.folder_kept {
+                said.push_str(&format!("\r\n\r\nYour original files are still in {}. They are yours to keep or delete.", dir.display()));
+            }
+            println!("{said}");
+        }
+    }
+    Ok(())
 }
 
 fn devices() -> Result<()> {

@@ -175,6 +175,7 @@ const dev = import.meta.env.DEV && !inTauri
 
 export const api = {
   listRecordings: () => (dev ? mockApi.listRecordings() : invoke<RecentItem[]>('list_recordings')),
+  startupProject: () => (dev ? Promise.resolve(null) : invoke<string | null>('startup_project')),
   openProject: (path: string) => (dev ? mockApi.openProject() : invoke<ProjectView>('open_project', { path })),
   saveProject: (manifest: Manifest) => invoke<void>('save_project', { manifest }),
   exportProject: (req: {

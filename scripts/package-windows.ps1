@@ -1,5 +1,6 @@
-# Builds the portable Windows release: one folder (and a zip of it) that runs
-# from anywhere, including a USB stick, with no installer or admin rights.
+# Builds the Windows release: one folder that runs from anywhere with no
+# installer or admin rights, a zip of it, and a per-user setup.exe that packs
+# the same exes (scripts\openscrib-setup.nsi, needs NSIS).
 #
 # Copyright (c) 2026 Rovamp Services Pty Ltd. The exes carry this in their
 # Windows file properties (tauri.conf.json and the build.rs files).
@@ -8,8 +9,9 @@
 #   1. powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -NoZip
 #   2. Sign the three .exe files in dist\OpenSCRIB-<version>-windows-x64\ (e.g. with SignGUI)
 #   3. powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -ZipOnly
+#   4. Sign dist\OpenSCRIB-<version>-setup.exe
 #
-# Without signing, run it with no switches to build and zip in one go.
+# Without signing, run it with no switches to do it all in one go.
 #
 # Cisco's OpenH264 and the AI models are NOT included: OpenH264 must be
 # fetched from Cisco by the user (the app does it on first run), and models
@@ -19,10 +21,12 @@ param(
     # Folder with the MSVC redistributable DLLs to ship next to the exes.
     [string]$Redist = "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Redist\MSVC\14.29.30133\x64",
     [switch]$SkipBuild,
-    # Stop before zipping, so the exes can be signed first.
+    # Stop before packing, so the exes can be signed first.
     [switch]$NoZip,
-    # Only zip the existing (signed) folder; don't build or copy anything.
-    [switch]$ZipOnly
+    # Only pack the existing (signed) folder; don't build or copy anything.
+    [switch]$ZipOnly,
+    # The NSIS compiler that builds the setup.exe.
+    [string]$MakeNsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
 )
 
 $ErrorActionPreference = "Stop"
@@ -118,3 +122,10 @@ Compress-Archive -Path "$stage\$name" -DestinationPath $zip
 Remove-Item -Recurse -Force $stage
 $size = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 Write-Host "Zipped $zip ($size MB)"
+
+if (-not (Test-Path $MakeNsis)) { throw "NSIS not found at $MakeNsis; pass -MakeNsis" }
+$setup = Join-Path $root "dist\OpenSCRIB-$version-setup.exe"
+& $MakeNsis /V2 "/DVERSION=$version" "/DSOURCE=$out" "/DOUTFILE=$setup" "$root\scripts\openscrib-setup.nsi"
+if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+$size = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+Write-Host "Built $setup ($size MB). It needs signing too."

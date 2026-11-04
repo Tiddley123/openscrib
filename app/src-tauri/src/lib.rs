@@ -80,6 +80,13 @@ fn projects_dir() -> PathBuf {
     openscrib_core::paths::projects_dir()
 }
 
+/// The recording Explorer asked this window to open, if any.
+#[tauri::command]
+fn startup_project() -> Option<String> {
+    let path = PathBuf::from(std::env::args_os().nth(1)?);
+    (path.extension().is_some_and(|e| e == PROJECT_EXT) && path.is_file()).then(|| path.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn list_recordings() -> CmdResult<Vec<RecentItem>> {
     let dir = projects_dir();
@@ -661,6 +668,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
+            startup_project,
             list_recordings,
             open_project,
             save_project,

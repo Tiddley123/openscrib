@@ -4749,7 +4749,7 @@ dependencies = [
 
 [[package]]
 name = "openscrib-app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "image",
@@ -4770,7 +4770,7 @@ dependencies = [
 
 [[package]]
 name = "openscrib-capture"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "bzip2",
@@ -4796,7 +4796,7 @@ dependencies = [
 
 [[package]]
 name = "openscrib-cli"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -4817,7 +4817,7 @@ dependencies = [
 
 [[package]]
 name = "openscrib-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "image",
  "matroska-demuxer",
@@ -4832,7 +4832,7 @@ dependencies = [
 
 [[package]]
 name = "openscrib-export"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -4856,7 +4856,7 @@ dependencies = [
 
 [[package]]
 name = "openscrib-process"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "flate2",
@@ -4878,7 +4878,7 @@ dependencies = [
 
 [[package]]
 name = "openscrib-vision"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "llama-cpp-2",
