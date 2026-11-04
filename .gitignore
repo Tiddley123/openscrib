@@ -8,3 +8,6 @@ runtime/
 .cargo/config.toml
 .claude/
 dist/
+
+# Finder leaves these behind, not least while a .dmg is staged.
+.DS_Store

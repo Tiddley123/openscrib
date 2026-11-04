@@ -134,6 +134,69 @@ if [ "$sign" = 1 ]; then
         fi
     fi
 fi
+if [ "$skip_build" = 0 ]; then
+    echo "==> Building the recorder and the vision helper"
+    (cd "$root" && cargo build --release -p openscrib-cli -p openscrib-vision)
+    echo "==> Building OpenSCRIB.app"
+    (cd "$root/app" && npx tauri build --bundles app)
+
+    rm -rf "$out"
+    mkdir -p "$out"
+    cp -R "$root/target/release/bundle/macos/OpenSCRIB.app" "$app"
+
+    # Both helpers go beside the app binary, where the editor looks for them.
+    # "openscrib-cli", not "openscrib": the disk is case-insensitive, so that
+    # would collide with the app's own OpenSCRIB binary.
+    cp "$root/target/release/openscrib" "$app/Contents/MacOS/openscrib-cli"
+    cp "$root/target/release/openscrib-vision" "$app/Contents/MacOS/openscrib-vision"
+
+    cp "$root/LICENSE-MIT" "$out/LICENSE-MIT.txt"
+    cat > "$out/README.txt" <<TXT
+OpenSCRIB $version - macOS ($arch)
+Copyright (c) 2026 Rovamp Services Pty Ltd
+
+Drag OpenSCRIB.app to Applications and open it.
+
+First run:
+  1. macOS asks for Screen Recording and Accessibility. Both are needed:
+     without them a recording captures nothing. The home screen has the
+     buttons, and macOS reopens OpenSCRIB after you grant them.
+  2. Click "Get OpenH264" on the home screen to enable screen video. It
+     downloads Cisco's free encoder (under 1 MB), as their licence requires.
+  3. Narration asks for the microphone the first time you record.
+
+Your files:
+  ~/Documents/OpenSCRIB                       recordings and exports
+  ~/Library/Application Support/OpenSCRIB     models and OpenH264
+
+Command line:
+  /Applications/OpenSCRIB.app/Contents/MacOS/openscrib-cli --help
+  (it needs the same two permissions, granted to your terminal)
+TXT
+    echo "Built $app"
+fi
+
+[ -d "$app" ] || { echo "$app doesn't exist; build it first" >&2; exit 1; }
+
+# This script once lost its build step to a careless edit and then signed and
+# shipped the previous build without a word, so never sign a bundle that is
+# older than the code it came from.
+newest_src="$(find "$root/crates" "$root/app/src" "$root/app/src-tauri/src" \
+    \( -name '*.rs' -o -name '*.ts' -o -name '*.svelte' \) -exec stat -f '%m' {} + | sort -rn | head -1)"
+built="$(stat -f %m "$app/Contents/MacOS/openscrib-app")"
+if [ "$built" -lt "${newest_src:-0}" ]; then
+    echo "$app was built $(date -r "$built" '+%d %b %H:%M'), before the code last changed." >&2
+    if [ "$skip_build" = 0 ]; then
+        echo "The build step did not run. That is a bug in this script, not in the build." >&2
+        exit 1
+    fi
+    echo "Carrying on because --skip-build was asked for." >&2
+fi
+
+# Cargo's own stripping needs rust-objcopy, which a rustup toolchain without
+# libLLVM.dylib can't run, so the release binaries can still carry their debug
+# info (~20 MB each). strip does the same job, and has to come before signing.
+strip -S -x "$app/Contents/MacOS/"* 2> /dev/null || true
 
 if [ "$sign" = 1 ]; then
     echo "==> Signing with \"$IDENTITY_NAME\" [$IDENTITY, sub-CA $IDENTITY_SUBCA]"
