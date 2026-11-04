@@ -5,6 +5,8 @@ step-by-step guide with annotated screenshots and an edited video. Capture works
 from pixels and coordinates, so it also works through TeamViewer and other
 remote sessions.
 
+I originally created this to document my proprietary software workflows, but this can be used to do document almost anything on a computer. <3
+
 The design is in [docs/outline.md](docs/outline.md).
 
 ## The editor
