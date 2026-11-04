@@ -239,7 +239,7 @@ fn subscribe_input(clock: Clock) -> Result<Receiver<TimedInput>> {
         thread::Builder::new()
             .name("input-hook".into())
             .spawn(|| {
-                let res = rdev::listen(|e| {
+                let sink = |e: rdev::Event| {
                     let guard = INPUT_SINK.lock().expect("input sink lock");
                     if let Some((tx, clock)) = guard.as_ref() {
                         let t_ms = clock.now_ms();
@@ -247,9 +247,15 @@ fn subscribe_input(clock: Clock) -> Result<Receiver<TimedInput>> {
                             let _ = tx.send(TimedInput { t_ms, input });
                         }
                     }
-                });
+                };
+                // macOS has its own hook: rdev's asks HIToolbox to name every
+                // keystroke, which traps off the main thread.
+                #[cfg(target_os = "macos")]
+                let res = crate::mac::input::listen(sink).map_err(|e| e.to_string());
+                #[cfg(not(target_os = "macos"))]
+                let res = rdev::listen(sink).map_err(|e| format!("{e:?}"));
                 if let Err(e) = res {
-                    error!("input hook failed: {e:?}");
+                    error!("input hook failed: {e}");
                 }
                 // Wake any recording waiting on input so it can report this.
                 INPUT_SINK.lock().expect("input sink lock").take();

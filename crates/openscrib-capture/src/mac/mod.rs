@@ -8,6 +8,8 @@
 //! origin and size scale the same way, so a click's offset into the frame
 //! captured from that monitor stays exact.
 
+pub mod input;
+
 use std::ffi::c_void;
 
 use core_foundation::base::TCFType;

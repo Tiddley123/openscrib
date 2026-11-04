@@ -21,7 +21,10 @@
     saveSettings()
   })
 
-  // Stop shortcut capture. Mirrors `Hotkey::parse` in openscrib-capture.
+  // Stop shortcut capture. Mirrors `Hotkey::parse` in openscrib-capture,
+  // which accepts Win, Cmd, Meta and Super for the same modifier and labels
+  // it the way the platform does.
+  const META = /Mac/i.test(navigator.userAgent) ? 'Cmd' : 'Win'
   let listening = $state(false)
   let keyError = $state<string | null>(null)
   const SPECIAL: Record<string, string> = {
@@ -46,10 +49,12 @@
       keyError = `${e.code} can't be used; try a letter, a number, an F-key or Pause.`
       return
     }
-    const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Win'].filter(Boolean)
-    const special = /^F\d+$/.test(name) || ['Pause', 'ScrollLock', 'PrintScreen', 'Insert', 'Delete', 'Home', 'End', 'PageUp', 'PageDown', 'Esc'].includes(name)
+    const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && META].filter(Boolean)
+    // Esc and Space are deliberately missing: `Hotkey::parse` wants a
+    // modifier with them, or they would fire while someone is typing.
+    const special = /^F\d+$/.test(name) || ['Pause', 'ScrollLock', 'PrintScreen', 'Insert', 'Delete', 'Home', 'End', 'PageUp', 'PageDown'].includes(name)
     if (!e.ctrlKey && !e.altKey && !e.metaKey && !special) {
-      keyError = 'Add Ctrl, Alt or Win, or that key would stop recording while you type.'
+      keyError = `Add Ctrl, Alt or ${META}, or that key would stop recording while you type.`
       return
     }
     settings.stopKey = [...mods, name].join('+')
