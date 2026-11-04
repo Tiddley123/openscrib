@@ -39,6 +39,29 @@
     return SPECIAL[code] ?? null
   }
 
+  // While the picker is listening, the whole window is watched rather than the
+  // button: WebKit on macOS gives a button no keyboard focus when it is
+  // clicked, so a handler on the button itself never heard the combination.
+  // The capture phase matters too, or the dialog's own Escape-to-close would
+  // run first and no shortcut using Esc could be set.
+  $effect(() => {
+    if (!listening) return
+    window.addEventListener('keydown', captureKey, true)
+    return () => window.removeEventListener('keydown', captureKey, true)
+  })
+
+  // Escape closes the dialog, for the same reason from the window rather than
+  // the dialog: with nothing in it focused, nothing in it hears a key. While
+  // the picker listens, Escape belongs to the combination instead.
+  $effect(() => {
+    if (listening) return
+    const close = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onclose()
+    }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  })
+
   function captureKey(e: KeyboardEvent) {
     if (!listening) return
     e.preventDefault()
@@ -69,7 +92,6 @@
   onclick={(e) => {
     if (e.target === e.currentTarget) onclose()
   }}
-  onkeydown={(e) => e.key === 'Escape' && onclose()}
 >
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <h2 id="settings-title">Settings</h2>
@@ -118,7 +140,7 @@
     <section>
       <div class="label">Stop recording shortcut</div>
       <div class="hotkey">
-        <button class="keys" class:listening onclick={() => (listening = !listening)} onkeydown={captureKey}>
+        <button class="keys" class:listening onclick={() => (listening = !listening)}>
           {#if listening}
             Press the new combination…
           {:else}
